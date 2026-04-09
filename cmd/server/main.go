@@ -74,6 +74,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 	linkHandler.Register(mux, middleware.RequireAuth)
+	handler.RegisterDocs(mux)
 
 	// rate limiting on the hot paths (applied at mux level via wrapper)
 	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)

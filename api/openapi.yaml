@@ -1,0 +1,288 @@
+openapi: "3.0.3"
+
+info:
+  title: Short Link API
+  description: URL shortening service — shorten, redirect, manage links.
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+paths:
+
+  /healthz:
+    get:
+      summary: Liveness check
+      security: []
+      tags: [System]
+      responses:
+        "200":
+          description: Service is alive
+
+  /{code}:
+    get:
+      summary: Redirect to original URL
+      description: |
+        Public endpoint — no authentication required.
+        Resolves the short code and issues a 302 redirect.
+        Click events are recorded asynchronously.
+      security: []
+      tags: [Links]
+      parameters:
+        - $ref: "#/components/parameters/code"
+      responses:
+        "302":
+          description: Redirect to original URL
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+              example: https://www.example.com/some/long/path
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/links:
+    post:
+      summary: Shorten a URL
+      tags: [Links]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShortenRequest"
+            example:
+              url: "https://www.example.com/some/very/long/path?with=query"
+              expires_at: "2026-12-31T23:59:59Z"
+      responses:
+        "201":
+          description: Link created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShortenResponse"
+              example:
+                short_url: "http://localhost:8080/aB3xY9z"
+                code: "aB3xY9z"
+                expires_at: "2026-12-31T23:59:59Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    get:
+      summary: List authenticated user's links
+      description: Returns a cursor-paginated list of links (page size 20).
+      tags: [Links]
+      parameters:
+        - name: cursor
+          in: query
+          description: Opaque cursor from `next_cursor` in the previous response.
+          schema:
+            type: string
+          example: "1234567890123456789"
+      responses:
+        "200":
+          description: Paginated list of links
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/links/{code}:
+    delete:
+      summary: Delete a link
+      description: Only the owner of the link may delete it.
+      tags: [Links]
+      parameters:
+        - $ref: "#/components/parameters/code"
+      responses:
+        "204":
+          description: Link deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: RS256 JWT — access token (15 min TTL). Obtain via POST /api/auth/login (Phase 5).
+
+  parameters:
+    code:
+      name: code
+      in: path
+      required: true
+      description: Base62-encoded short code (7–8 characters).
+      schema:
+        type: string
+        pattern: "^[0-9A-Za-z]{7,8}$"
+      example: aB3xY9z
+
+  schemas:
+
+    ShortenRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: The original URL to shorten. Must use http or https.
+          example: "https://www.example.com/some/very/long/path"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional expiry time in RFC3339 format.
+          example: "2026-12-31T23:59:59Z"
+
+    ShortenResponse:
+      type: object
+      properties:
+        short_url:
+          type: string
+          format: uri
+          description: Fully-qualified short URL ready to share.
+          example: "http://localhost:8080/aB3xY9z"
+        code:
+          type: string
+          description: The short code portion of the URL.
+          example: "aB3xY9z"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-12-31T23:59:59Z"
+
+    Link:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Snowflake ID (returned as string to avoid JS integer overflow).
+          example: "1234567890123456789"
+        short_url:
+          type: string
+          format: uri
+          example: "http://localhost:8080/aB3xY9z"
+        code:
+          type: string
+          example: "aB3xY9z"
+        original_url:
+          type: string
+          format: uri
+          example: "https://www.example.com/some/very/long/path"
+        clicks:
+          type: integer
+          format: int64
+          description: Aggregated click count (updated in batch, not per-redirect).
+          example: 142
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-12-31T23:59:59Z"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-04-09T10:00:00Z"
+
+    ListResponse:
+      type: object
+      properties:
+        links:
+          type: array
+          items:
+            $ref: "#/components/schemas/Link"
+        next_cursor:
+          type: string
+          nullable: true
+          description: Pass as `?cursor=` in the next request. Empty string means no more pages.
+          example: "1234567890123456789"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "link not found"
+
+  responses:
+
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "URL must use http or https"
+
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "unauthorized"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "link not found"
+
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+          example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "rate limit exceeded"
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "failed to resolve link"

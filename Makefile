@@ -11,7 +11,7 @@ test:
 	go test ./...
 
 migrate:
-	migrate -path deploy/migrations -database "$$MYSQL_DSN" up
+	set -a && . ./.env && set +a && migrate -path deploy/migrations -database "mysql://$$MYSQL_USER:$$MYSQL_PASSWORD@tcp($$MYSQL_HOST:$$MYSQL_PORT)/$$MYSQL_DB" up
 
 lint:
 	golangci-lint run ./...

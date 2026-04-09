@@ -1,0 +1,24 @@
+# environment & secrets
+.env
+keys/
+
+# build artifacts
+bin/
+
+# dev tooling
+.git/
+.gitignore
+.dockerignore
+.golangci.yml
+
+# docs & planning
+*.md
+
+# test artifacts
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/

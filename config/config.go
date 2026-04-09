@@ -1,0 +1,35 @@
+package config
+
+import "github.com/kelseyhightower/envconfig"
+
+type Config struct {
+	// HTTP
+	Port int `envconfig:"PORT" default:"8080"`
+
+	// MySQL
+	MySQLHost     string `envconfig:"MYSQL_HOST" default:"localhost"`
+	MySQLPort     int    `envconfig:"MYSQL_PORT" default:"3306"`
+	MySQLUser     string `envconfig:"MYSQL_USER" required:"true"`
+	MySQLPassword string `envconfig:"MYSQL_PASSWORD" required:"true"`
+	MySQLDB       string `envconfig:"MYSQL_DB" required:"true"`
+
+	// Redis
+	RedisAddr     string `envconfig:"REDIS_ADDR" default:"localhost:6379"`
+	RedisPassword string `envconfig:"REDIS_PASSWORD"`
+	RedisDB       int    `envconfig:"REDIS_DB" default:"0"`
+
+	// RabbitMQ
+	RabbitMQURL string `envconfig:"RABBITMQ_URL" required:"true"`
+
+	// JWT
+	JWTPrivateKeyPath string `envconfig:"JWT_PRIVATE_KEY_PATH" required:"true"`
+	JWTPublicKeyPath  string `envconfig:"JWT_PUBLIC_KEY_PATH" required:"true"`
+}
+
+func Load() (*Config, error) {
+	var cfg Config
+	if err := envconfig.Process("", &cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}

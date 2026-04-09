@@ -1,0 +1,21 @@
+# environment
+.env
+
+# build output
+bin/
+
+# TLS / JWT keys
+keys/
+
+# Go
+vendor/
+*.test
+*.out
+coverage.html
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

@@ -14,6 +14,7 @@ import (
 	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/handler"
 	"github.com/april/shorten-link/internal/logger"
+	"github.com/april/shorten-link/internal/messaging"
 	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
@@ -57,6 +58,16 @@ func main() {
 	defer mqConn.Close()
 	log.Info("RabbitMQ connected")
 
+	if err := messaging.Setup(mqConn); err != nil {
+		log.Fatal("failed to setup messaging", zap.Error(err))
+	}
+
+	pub, err := messaging.NewPublisher(mqConn, log)
+	if err != nil {
+		log.Fatal("failed to create publisher", zap.Error(err))
+	}
+	defer pub.Close()
+
 	// dependencies
 	gen, err := idgen.NewGenerator(1) // nodeID 1; use cfg field per pod in k8s
 	if err != nil {
@@ -64,7 +75,7 @@ func main() {
 	}
 	repo := repository.NewLinkMySQL(db)
 	cache := repository.NewLinkRedis(rdb)
-	svc := service.NewLinkService(repo, cache, gen, service.NoopPublisher{})
+	svc := service.NewLinkService(repo, cache, gen, pub)
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(svc, cfg.BaseURL)

@@ -25,7 +25,7 @@ func NewLinkRedis(rdb *redis.Client) service.LinkCache {
 func (c *linkRedis) Get(ctx context.Context, code string) (string, error) {
 	val, err := c.rdb.Get(ctx, keyPrefix+code).Result()
 	if errors.Is(err, redis.Nil) {
-		return "", ErrNotFound
+		return "", service.ErrNotFound
 	}
 	if err != nil {
 		return "", fmt.Errorf("cache: get %q: %w", code, err)

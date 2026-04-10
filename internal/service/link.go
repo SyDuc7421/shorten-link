@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrNotFound is returned by repositories when a resource does not exist.
+var ErrNotFound = errors.New("not found")
 
 // Link is the core domain model for a shortened URL.
 type Link struct {

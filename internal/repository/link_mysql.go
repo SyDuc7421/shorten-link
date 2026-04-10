@@ -11,9 +11,6 @@ import (
 	"github.com/april/shorten-link/internal/service"
 )
 
-// ErrNotFound is returned when a link does not exist.
-var ErrNotFound = errors.New("link not found")
-
 type linkMySQL struct {
 	db *sqlx.DB
 }
@@ -57,7 +54,7 @@ func (r *linkMySQL) GetByCode(ctx context.Context, code string) (*service.Link, 
 	}
 	if err := r.db.GetContext(ctx, &row, q, code); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
+			return nil, service.ErrNotFound
 		}
 		return nil, fmt.Errorf("repository: get by code: %w", err)
 	}
@@ -83,7 +80,7 @@ func (r *linkMySQL) Delete(ctx context.Context, code string, userID int64) error
 		return fmt.Errorf("repository: delete link rows affected: %w", err)
 	}
 	if n == 0 {
-		return ErrNotFound
+		return service.ErrNotFound
 	}
 	return nil
 }

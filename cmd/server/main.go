@@ -68,30 +68,44 @@ func main() {
 	}
 	defer pub.Close()
 
-	// dependencies
-	gen, err := idgen.NewGenerator(1) // nodeID 1; use cfg field per pod in k8s
+	// RSA keys for JWT
+	privateKey, publicKey, err := cfg.LoadRSAKeys()
+	if err != nil {
+		log.Fatal("failed to load RSA keys", zap.Error(err))
+	}
+
+	// ID generator
+	gen, err := idgen.NewGenerator(1) // nodeID 1; use a per-pod config field in k8s
 	if err != nil {
 		log.Fatal("failed to create ID generator", zap.Error(err))
 	}
-	repo := repository.NewLinkMySQL(db)
-	cache := repository.NewLinkRedis(rdb)
-	svc := service.NewLinkService(repo, cache, gen, pub)
+
+	// repositories
+	linkRepo := repository.NewLinkMySQL(db)
+	linkCache := repository.NewLinkRedis(rdb)
+	userRepo := repository.NewUserMySQL(db)
+	tokenCache := repository.NewTokenRedis(rdb)
+
+	// services
+	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
+	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey)
 
 	// handlers
-	linkHandler := handler.NewLinkHandler(svc, cfg.BaseURL)
+	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
+	authHandler := handler.NewAuthHandler(authSvc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	authHandler.Register(mux)
 	linkHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
 
-	// rate limiting on the hot paths (applied at mux level via wrapper)
+	// rate limiting
 	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)
 	createRL := middleware.RateLimit(rdb, "create", 10, time.Minute)
 
-	// wrap the mux: redirect and create get their own rate limits
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path != "/healthz" && !isAPIPath(r.URL.Path):
@@ -105,7 +119,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: middleware.RequestID(log)(root),
+		Handler: middleware.JWTAuth(authSvc)(middleware.RequestID(log)(root)),
 	}
 
 	go func() {

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/april/shorten-link/internal/ctxkey"
-	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -186,7 +185,6 @@ func (h *LinkHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// isNotFound checks if err wraps repository.ErrNotFound.
 func isNotFound(err error) bool {
-	return errors.Is(err, repository.ErrNotFound)
+	return errors.Is(err, service.ErrNotFound)
 }

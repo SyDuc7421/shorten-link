@@ -134,7 +134,7 @@ func TestLinkMySQL_GetByCode_NotFound(t *testing.T) {
 	repo := repository.NewLinkMySQL(db)
 
 	_, err := repo.GetByCode(context.Background(), "nope")
-	if err != repository.ErrNotFound {
+	if err != service.ErrNotFound {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
 }
@@ -151,7 +151,7 @@ func TestLinkMySQL_Delete(t *testing.T) {
 	if err := repo.Delete(ctx, "del0001", 2); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if err := repo.Delete(ctx, "del0001", 2); err != repository.ErrNotFound {
+	if err := repo.Delete(ctx, "del0001", 2); err != service.ErrNotFound {
 		t.Errorf("want ErrNotFound on second delete, got %v", err)
 	}
 }
@@ -237,7 +237,7 @@ func TestLinkRedis_Get_NotFound(t *testing.T) {
 	cache := repository.NewLinkRedis(rdb)
 
 	_, err := cache.Get(context.Background(), "missing")
-	if err != repository.ErrNotFound {
+	if err != service.ErrNotFound {
 		t.Errorf("want ErrNotFound, got %v", err)
 	}
 }
@@ -251,7 +251,7 @@ func TestLinkRedis_Delete(t *testing.T) {
 	if err := cache.Delete(ctx, "todel"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := cache.Get(ctx, "todel"); err != repository.ErrNotFound {
+	if _, err := cache.Get(ctx, "todel"); err != service.ErrNotFound {
 		t.Errorf("want ErrNotFound after delete, got %v", err)
 	}
 }

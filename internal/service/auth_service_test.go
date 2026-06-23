@@ -75,6 +75,16 @@ func (m *mockTokenCache) DeleteRefreshToken(_ context.Context, id string) error 
 	return nil
 }
 
+func (m *mockTokenCache) IncrLockout(_ context.Context, email string, _ time.Duration) (int64, error) {
+	m.tokens["lockout:"+email]++
+	return m.tokens["lockout:"+email], nil
+}
+
+func (m *mockTokenCache) DeleteLockout(_ context.Context, email string) error {
+	delete(m.tokens, "lockout:"+email)
+	return nil
+}
+
 // --- helpers ---
 
 func newAuthSvc(t *testing.T, userRepo service.UserRepository, tokenCache service.TokenCache) *service.AuthService {

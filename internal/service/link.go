@@ -9,6 +9,9 @@ import (
 // ErrNotFound is returned by repositories when a resource does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrForbiddenURL is returned when a URL targets a private/internal address (SSRF guard).
+var ErrForbiddenURL = errors.New("service: URL targets a forbidden address")
+
 // Link is the core domain model for a shortened URL.
 type Link struct {
 	ID          int64

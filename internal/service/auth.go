@@ -15,6 +15,9 @@ var ErrInvalidCredentials = errors.New("service: invalid email or password")
 // ErrInvalidToken is returned when a JWT or refresh token is invalid/expired.
 var ErrInvalidToken = errors.New("service: invalid or expired token")
 
+// ErrAccountLocked is returned after too many consecutive failed login attempts.
+var ErrAccountLocked = errors.New("service: account temporarily locked")
+
 // User is the auth domain model.
 type User struct {
 	ID           int64
@@ -38,6 +41,9 @@ type TokenCache interface {
 	StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration) error
 	GetRefreshToken(ctx context.Context, tokenID string) (int64, error)
 	DeleteRefreshToken(ctx context.Context, tokenID string) error
+	// Lockout methods used by AuthService.
+	IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error)
+	DeleteLockout(ctx context.Context, email string) error
 }
 
 // TokenPair holds an access + refresh token pair returned on login/register/refresh.

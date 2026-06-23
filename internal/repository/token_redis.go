@@ -51,3 +51,23 @@ func (c *tokenRedis) DeleteRefreshToken(ctx context.Context, tokenID string) err
 	}
 	return nil
 }
+
+const lockoutPrefix = "lockout:"
+
+func (c *tokenRedis) IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error) {
+	key := lockoutPrefix + email
+	count, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, fmt.Errorf("token cache: incr lockout: %w", err)
+	}
+	// Set TTL only on first increment so the window starts fresh.
+	if count == 1 {
+		c.rdb.Expire(ctx, key, ttl) //nolint:errcheck
+	}
+	return count, nil
+}
+
+func (c *tokenRedis) DeleteLockout(ctx context.Context, email string) error {
+	c.rdb.Del(ctx, lockoutPrefix+email) //nolint:errcheck
+	return nil
+}

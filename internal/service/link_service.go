@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"time"
 
@@ -46,6 +47,10 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL string, 
 		return nil, ErrInvalidURL
 	}
 
+	if err := checkSSRF(u); err != nil {
+		return nil, err
+	}
+
 	id := s.gen.NextID()
 	code := idgen.ToBase62(id)
 
@@ -59,7 +64,16 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL string, 
 	if err := s.repo.Create(ctx, link); err != nil {
 		return nil, fmt.Errorf("service: shorten: %w", err)
 	}
-	s.cache.Set(ctx, code, rawURL, cacheTTL) //nolint:errcheck
+
+	ttl := cacheTTL
+	if expiresAt != nil {
+		if until := time.Until(*expiresAt); until <= 0 {
+			return link, nil // already expired — don't cache
+		} else if until < ttl {
+			ttl = until
+		}
+	}
+	s.cache.Set(ctx, code, rawURL, ttl) //nolint:errcheck
 
 	go s.pub.Publish(context.Background(), "link.created", map[string]any{"code": code, "user_id": userID}) //nolint:errcheck
 
@@ -78,7 +92,17 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("service: resolve: %w", err)
 	}
-	s.cache.Set(ctx, code, link.OriginalURL, cacheTTL) //nolint:errcheck
+	if link.ExpiresAt != nil && time.Now().After(*link.ExpiresAt) {
+		return "", ErrNotFound
+	}
+
+	ttl := cacheTTL
+	if link.ExpiresAt != nil {
+		if until := time.Until(*link.ExpiresAt); until < ttl {
+			ttl = until
+		}
+	}
+	s.cache.Set(ctx, code, link.OriginalURL, ttl) //nolint:errcheck
 	go s.pub.Publish(context.Background(), "link.clicked", map[string]any{"code": code}) //nolint:errcheck
 
 	return link.OriginalURL, nil
@@ -100,4 +124,62 @@ func (s *LinkService) ListByUser(ctx context.Context, userID int64, afterID int6
 		return nil, fmt.Errorf("service: list by user: %w", err)
 	}
 	return links, nil
+}
+
+// privateRanges lists CIDR blocks that must not be targeted via shortened links.
+var privateRanges = func() []*net.IPNet {
+	cidrs := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"169.254.0.0/16", // link-local
+		"::1/128",
+		"fc00::/7", // IPv6 ULA
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, _ := net.ParseCIDR(c)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+// checkSSRF returns ErrForbiddenURL if u targets a private/internal address or
+// uses a non-HTTP/S scheme (scheme validation is already done by the caller).
+func checkSSRF(u *url.URL) error {
+	host := u.Hostname()
+	if host == "" || host == "localhost" {
+		return ErrForbiddenURL
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Hostname — resolve to check. Skip on resolution failure (allow).
+		addrs, err := net.LookupHost(host)
+		if err != nil {
+			return nil
+		}
+		for _, a := range addrs {
+			if isPrivate(net.ParseIP(a)) {
+				return ErrForbiddenURL
+			}
+		}
+		return nil
+	}
+	if isPrivate(ip) {
+		return ErrForbiddenURL
+	}
+	return nil
+}
+
+func isPrivate(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, r := range privateRanges {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

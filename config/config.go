@@ -4,8 +4,9 @@ import "github.com/kelseyhightower/envconfig"
 
 type Config struct {
 	// HTTP
-	Port    int    `envconfig:"PORT" default:"8080"`
-	BaseURL string `envconfig:"BASE_URL" default:"http://localhost:8080"`
+	Port           int    `envconfig:"PORT" default:"8080"`
+	BaseURL        string `envconfig:"BASE_URL" default:"http://localhost:8080"`
+	AllowedOrigins string `envconfig:"ALLOWED_ORIGINS" default:""` // comma-separated, empty = deny all CORS
 
 	// MySQL
 	MySQLHost     string `envconfig:"MYSQL_HOST" default:"localhost"`

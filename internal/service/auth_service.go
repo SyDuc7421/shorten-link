@@ -19,6 +19,8 @@ const (
 	accessTokenTTL  = 15 * time.Minute
 	refreshTokenTTL = 7 * 24 * time.Hour
 	bcryptCost      = 12
+	lockoutMax      = 5
+	lockoutTTL      = 15 * time.Minute
 )
 
 // AuthService handles user registration, login, and token refresh.
@@ -75,9 +77,12 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*To
 }
 
 // Login verifies credentials and returns a token pair.
+// Accounts are locked for lockoutTTL after lockoutMax consecutive failures.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*TokenPair, error) {
 	user, err := s.users.GetByEmail(ctx, email)
 	if errors.Is(err, ErrNotFound) {
+		// Still increment lockout counter to prevent user-enumeration timing attacks.
+		s.tokens.IncrLockout(ctx, email, lockoutTTL) //nolint:errcheck
 		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -85,9 +90,14 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Token
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		count, _ := s.tokens.IncrLockout(ctx, email, lockoutTTL)
+		if count >= lockoutMax {
+			return nil, ErrAccountLocked
+		}
 		return nil, ErrInvalidCredentials
 	}
 
+	s.tokens.DeleteLockout(ctx, email) //nolint:errcheck
 	return s.issueTokenPair(ctx, user.ID)
 }
 

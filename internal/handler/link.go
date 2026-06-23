@@ -77,6 +77,10 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "URL must use http or https")
 		return
 	}
+	if errors.Is(err, service.ErrForbiddenURL) {
+		writeError(w, http.StatusUnprocessableEntity, "URL targets a forbidden address")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to shorten URL")
 		return

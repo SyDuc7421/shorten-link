@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -93,11 +94,20 @@ func main() {
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
 	authHandler := handler.NewAuthHandler(authSvc)
+	healthHandler := handler.NewHealthChecker(db, rdb, mqConn)
+
+	// CORS origins from config
+	var allowedOrigins []string
+	if cfg.AllowedOrigins != "" {
+		for _, o := range strings.Split(cfg.AllowedOrigins, ",") {
+			if s := strings.TrimSpace(o); s != "" {
+				allowedOrigins = append(allowedOrigins, s)
+			}
+		}
+	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	healthHandler.Register(mux)
 	authHandler.Register(mux)
 	linkHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
@@ -117,9 +127,25 @@ func main() {
 		}
 	})
 
+	// Middleware chain (outermost → innermost):
+	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → root
+	chain := http.TimeoutHandler(
+		middleware.SecureHeaders(
+			middleware.CORS(allowedOrigins)(
+				middleware.JWTAuth(authSvc)(
+					middleware.RequestID(log)(
+						middleware.MaxBodySize(root),
+					),
+				),
+			),
+		),
+		10*time.Second,
+		`{"error":"request timeout"}`,
+	)
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: middleware.JWTAuth(authSvc)(middleware.RequestID(log)(root)),
+		Handler: chain,
 	}
 
 	go func() {

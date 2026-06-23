@@ -73,6 +73,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
+	if errors.Is(err, service.ErrAccountLocked) {
+		writeError(w, http.StatusTooManyRequests, "account temporarily locked due to too many failed attempts")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "login failed")
 		return

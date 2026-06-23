@@ -40,7 +40,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 	}
 	t.Cleanup(func() { c.Terminate(ctx) }) //nolint:errcheck
 
-	dsn, err := c.ConnectionString(ctx, "parseTime=true")
+	dsn, err := c.ConnectionString(ctx, "parseTime=true", "multiStatements=true")
 	if err != nil {
 		t.Fatalf("mysql dsn: %v", err)
 	}

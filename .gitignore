@@ -19,3 +19,9 @@ coverage.html
 # IDE
 .idea/
 .vscode/
+
+# Serena
+.serena/
+
+# Codegraph
+.codegraph/

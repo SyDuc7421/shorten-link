@@ -1,99 +1,70 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-## Project status
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-This is a **pre-implementation** Go URL shortener service. Only the implementation plan (`shortlink-implementation-plan.md`) exists so far — no code has been written.
+## 1. Think Before Coding
 
-## Planned commands (Makefile targets)
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-Once the Makefile is created:
+Before implementing:
+
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
 
 ```
-make run          # run the API server
-make build        # build binaries
-make test         # run all tests
-make migrate      # run database migrations
-make lint         # run golangci-lint
-make docker-up    # start MySQL + Redis + RabbitMQ via docker-compose
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 ```
 
-## Architecture
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-```
-Handler → Service → Repository → DB / Cache
-                 ↓
-           Messaging → RabbitMQ
-```
+---
 
-**Dependency rule:** each layer imports only the layer directly below it. Interfaces are defined at the *consumer* site (in `service/`), not at the implementation site.
-
-### Planned directory structure
-
-```
-cmd/
-  server/    # API binary
-  worker/    # analytics consumer binary (scales independently from API)
-internal/
-  handler/   # HTTP handlers (stdlib net/http, no framework)
-  service/   # business logic; defines repository interfaces
-  messaging/ # RabbitMQ publisher + consumers
-pkg/
-  idgen/     # Snowflake ID generator + Base62 encoder
-config/      # envconfig struct
-deploy/      # Dockerfile, K8s manifests
-```
-
-### Critical paths
-
-**Redirect (hot path, ~95% of traffic):**
-- Redis lookup (~0.3ms) → on miss: MySQL lookup (~3ms) → warm cache → async publish click event → 302 redirect
-- Never block the redirect on analytics
-
-**Shorten (write path, ~5% of traffic):**
-- `idgen.NextID()` (local, no network) → MySQL write → Redis warm → async publish event → 201 response
-
-**Analytics consumer (background, fully decoupled):**
-- RabbitMQ → batch 500 events OR flush every 2s → single `BatchUpdateClicks()` per short_code per flush
-
-## Tech stack
-
-| Layer | Choice |
-|---|---|
-| Language | Go 1.22 |
-| HTTP | stdlib `net/http` (no framework) |
-| ORM | `sqlx` |
-| Cache | Redis 7 + `go-redis/v9` |
-| Queue | RabbitMQ 3.13 + `amqp091-go` |
-| Config | `envconfig` |
-| Logger | `zap` (structured JSON, injected via context) |
-| Migration | `golang-migrate` (versioned SQL files) |
-| Lint | `golangci-lint` (`errcheck`, `staticcheck`, `contextcheck`) |
-
-## Key implementation details
-
-- **IDs:** Snowflake (not `AUTO_INCREMENT`) — API pods generate IDs locally without a DB round-trip. Base62-encoded to 7–8 char short codes.
-- **Cache key prefix:** `sl:` in Redis. Pool size: 100 connections.
-- **MySQL pool:** 50 open / 20 idle connections.
-- **Rate limits:** 60 req/min per IP for redirects, 10 req/min for link creation (Redis sliding window).
-- **JWT:** RS256, access token 15min TTL, refresh token 7d stored in Redis with rotation.
-- **Auth:** `GET /{code}` is a public endpoint — skip JWT middleware there.
-- **Analytics table** (`analytics_daily`): `clicks` is a batch-updated counter, never written per-redirect.
-- **Startup:** ping DB, Redis, and RabbitMQ on startup — fail fast if any are down.
-- **Worker binary:** graceful shutdown via `os.Signal` → context cancel → drain in-flight messages before exit.
-
-## DB schema summary
-
-| Table | Key index |
-|---|---|
-| `users` | `UNIQUE(email)` |
-| `links` | `UNIQUE(short_code)` — primary hot index |
-| `analytics_daily` | `(link_id, stat_date)` |
-| `audit_log` | `(user_id, created_at)` |
-
-## Testing approach
-
-- Repository layer: integration tests with `testcontainers` (real MySQL + Redis, not mocks)
-- Service layer: unit tests with mock repositories
-- Target: 100% branch coverage on `Resolve()` cache hit/miss paths; CI fails if overall coverage < 70%
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// ID generator
-	gen, err := idgen.NewGenerator(1) // nodeID 1; use a per-pod config field in k8s
+	gen, err := idgen.NewGenerator(cfg.NodeID)
 	if err != nil {
 		log.Fatal("failed to create ID generator", zap.Error(err))
 	}
@@ -143,10 +143,7 @@ func main() {
 		`{"error":"request timeout"}`,
 	)
 
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: chain,
-	}
+	srv := newServer(cfg.Port, chain)
 
 	go func() {
 		log.Info("server starting", zap.Int("port", cfg.Port))
@@ -166,6 +163,17 @@ func main() {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
 	log.Info("stopped")
+}
+
+func newServer(port int, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second, // > TimeoutHandler's 10s so its 503 body is written
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 func isAPIPath(path string) bool {

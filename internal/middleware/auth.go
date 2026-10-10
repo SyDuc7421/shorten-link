@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
@@ -49,12 +48,4 @@ type TokenParserFunc func(token string) (int64, error)
 
 func (f TokenParserFunc) ParseAccessToken(token string) (int64, error) {
 	return f(token)
-}
-
-// contextKey is unexported to avoid collisions.
-type contextKey struct{ name string }
-
-// WithTokenParser stores a TokenParser in ctx (used by tests).
-func WithTokenParser(ctx context.Context, p TokenParser) context.Context {
-	return context.WithValue(ctx, contextKey{"parser"}, p)
 }

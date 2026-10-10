@@ -18,7 +18,6 @@ type Publisher struct {
 	conn *amqp.Connection
 	ch   *amqp.Channel
 	log  *zap.Logger
-	url  string // kept for reconnect
 }
 
 // NewPublisher opens a channel on conn and returns a ready Publisher.

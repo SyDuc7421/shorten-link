@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      # integration tests start MySQL/Redis via testcontainers (Docker is preinstalled)
+      - run: go test -race ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target server -t shortlink-server:ci .
+      - run: docker build --target worker -t shortlink-worker:ci .
+      - name: Validate production compose file
+        env:
+          DOMAIN: ci.example.com
+          MYSQL_ROOT_PASSWORD: x
+          MYSQL_DB: x
+          MYSQL_USER: x
+          MYSQL_PASSWORD: x
+          REDIS_PASSWORD: x
+          RABBITMQ_USER: x
+          RABBITMQ_PASSWORD: x
+        run: touch .env && docker compose -f docker-compose.prod.yml config -q

@@ -109,8 +109,12 @@ whole suite.
 ### Before opening a PR
 
 ```bash
-go vet ./... && go test ./...
+go vet ./... && go test ./... && make lint
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same plus `go test -race`,
+`govulncheck` and a Docker build on every PR and push to `master`. Lint
+settings live in `.golangci.yml`.
 
 In the PR description, state what you verified and what you didn't (for
 example "not tested against a real RabbitMQ").

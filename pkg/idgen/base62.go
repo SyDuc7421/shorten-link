@@ -3,7 +3,7 @@ package idgen
 const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 // ToBase62 encodes a positive int64 to a Base62 string.
-// Snowflake IDs produce 7–8 character output.
+// Snowflake IDs (2024 epoch) produce 10-character output, 11 from about 2030.
 func ToBase62(n int64) string {
 	if n == 0 {
 		return "0"

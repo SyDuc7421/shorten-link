@@ -1,7 +1,7 @@
 # Architecture — shorten-link
 
 A URL shortener: users sign up, turn long URLs into short codes like
-`https://short.example.com/4fR9kQ2`, and anyone who opens the short link is
+`https://short.example.com/R7dwPCPmUa`, and anyone who opens the short link is
 redirected to the original URL. Every click is counted in the background.
 
 This document explains how the pieces fit together. For *what* the system must
@@ -61,18 +61,18 @@ This is the request that matters most: it must be fast and must keep working
 even if parts of the system are slow.
 
 ```
-GET /4fR9kQ2
+GET /R7dwPCPmUa
   │
   ├─ middleware chain (see §4)
   ├─ rate limit: 60 requests/minute per client IP (Redis)
   │
-  ├─ LinkService.Resolve("4fR9kQ2")
-  │     ├─ Redis GET sl:4fR9kQ2 ── hit ──▶ URL
+  ├─ LinkService.Resolve("R7dwPCPmUa")
+  │     ├─ Redis GET sl:R7dwPCPmUa ── hit ──▶ URL
   │     └─ miss ──▶ MySQL SELECT … WHERE short_code = ?
   │                   ├─ not found or expired ──▶ 404
   │                   └─ found ──▶ cache it in Redis (TTL ≤ 24h, never past expiry)
   │
-  ├─ fire-and-forget: publish {"code":"4fR9kQ2"} to RabbitMQ (2s timeout)
+  ├─ fire-and-forget: publish {"code":"R7dwPCPmUa"} to RabbitMQ (2s timeout)
   │
   └─ 302 Found, Location: <original URL>
 ```
@@ -93,7 +93,7 @@ RabbitMQ queue "clicks"
   ▼
 worker ClickConsumer
   ├─ collects up to 500 events, or whatever arrived in 2 seconds
-  ├─ sums them per code: {"4fR9kQ2": 37, "xY71aB0": 4}
+  ├─ sums them per code: {"R7dwPCPmUa": 37, "Kp3xQ9aZ1b": 4}
   ├─ one MySQL transaction: UPDATE links SET clicks = clicks + ? …
   ├─ success ──▶ ack all messages
   └─ failure ──▶ retry once; second failure ──▶ dead-letter queue "clicks.dlq"
@@ -185,7 +185,9 @@ Every request passes through these, outermost first:
 | `pkg/idgen` | Snowflake ID generator + Base62 encoder (IDs become short codes) | `idgen.go` |
 | `api` | Embedded `openapi.yaml` | — |
 | `deploy/migrations` | SQL schema (golang-migrate format) | — |
-| `deploy/nginx` | Reverse proxy config | — |
+| `deploy/nginx` | Reverse proxy config (template; `${DOMAIN}` filled in at container start) | — |
+| `Dockerfile`, `docker-compose.prod.yml` | Production images and single-VPS stack; see [deploy.md](deploy.md) | — |
+| `.github/workflows/ci.yml` | Tests (with race detector), lint, govulncheck, image build | — |
 
 ---
 
@@ -195,7 +197,7 @@ No random strings and no "does this code exist?" loop.
 
 1. `idgen` produces a **Snowflake ID**: a 64-bit number made of
    *milliseconds since 2024-01-01* + *node ID (0–1023)* + *sequence (0–4095)*.
-2. That number is written in **Base62** (`0-9A-Za-z`), giving a 7–8 character code.
+2. That number is written in **Base62** (`0-9A-Za-z`), giving a 10-character code today (11 from about 2030).
 
 Codes are therefore unique as long as **every server instance has a different
 `NODE_ID`**. Two instances with the same node ID can generate the same code.

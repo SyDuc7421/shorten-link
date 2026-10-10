@@ -22,3 +22,11 @@ coverage.html
 # IDE
 .idea/
 .vscode/
+
+# local tooling and stray binaries
+.claude/
+.serena/
+.codegraph/
+/worker
+/server
+docs/

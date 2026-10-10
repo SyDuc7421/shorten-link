@@ -96,8 +96,8 @@ WAF, captcha, payments.
 | NFR-S7 | Slow-client protection (header/read/write/idle timeouts) | ✅ |
 | NFR-S8 | Secrets come from env/volumes, never committed | ✅ `.env`, `keys/` git-ignored |
 | NFR-S9 | JWT signing key can be rotated without logging everyone out (`kid`) | ❌ |
-| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ❌ `govulncheck`: 30 reachable findings (Go 1.26.0 stdlib, `amqp091-go` v1.10.0) |
-| NFR-S11 | Redis and RabbitMQ require authentication in production | ❌ dev compose uses no Redis password and `guest` RabbitMQ |
+| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.9, 0 reachable findings; enforced in CI |
+| NFR-S11 | Redis and RabbitMQ require authentication in production | ✅ prod compose refuses to start without `REDIS_PASSWORD` / `RABBITMQ_*` |
 | NFR-S12 | Audit trail for security-relevant actions | ❌ `audit_log` table unused |
 
 ### 3.3 Reliability
@@ -119,9 +119,9 @@ WAF, captcha, payments.
 | ID | Requirement | Status |
 |---|---|---|
 | NFR-D1 | Schema changes through versioned migrations | ✅ `deploy/migrations` + `make migrate` |
-| NFR-D2 | Migrations run automatically on deploy | ❌ manual |
+| NFR-D2 | Migrations run automatically on deploy | ✅ `migrate` service runs before server/worker start |
 | NFR-D3 | MySQL backups with tested restore | ❌ |
-| NFR-D4 | Redis persistence (AOF) so a restart does not log out every user | ❌ not configured |
+| NFR-D4 | Redis persistence (AOF) so a restart does not log out every user | ✅ prod compose |
 | NFR-D5 | Foreign key / cleanup of links when a user is deleted | ❌ no FK, no user deletion |
 
 ### 3.5 Observability
@@ -136,10 +136,10 @@ WAF, captcha, payments.
 
 | ID | Requirement | Status |
 |---|---|---|
-| NFR-DL1 | Container images for server and worker | ❌ `.dockerignore` exists, no `Dockerfile` |
-| NFR-DL2 | Production compose with only nginx exposed | ❌ dev compose exposes MySQL/Redis/RabbitMQ ports; nginx proxies to a `server` service that is not defined |
-| NFR-DL3 | CI runs tests, lint, `govulncheck` on every push | ❌ no `.github/workflows` |
-| NFR-DL4 | Deploy and rollback procedure documented | ❌ |
+| NFR-DL1 | Container images for server and worker | ✅ multi-stage `Dockerfile`, distroless nonroot (~11 MB) |
+| NFR-DL2 | Production compose with only nginx exposed | ✅ `docker-compose.prod.yml`, smoke-tested end to end |
+| NFR-DL3 | CI runs tests, lint, `govulncheck` on every push | ✅ `.github/workflows/ci.yml` (not yet run on GitHub) |
+| NFR-DL4 | Deploy and rollback procedure documented | ⚠️ [deploy.md](deploy.md); rollback is manual, no image registry |
 | NFR-DL5 | Each server instance gets a unique `NODE_ID` | ⚠️ configurable now; nothing enforces uniqueness |
 
 ---
@@ -170,10 +170,10 @@ Ordered by risk if you launch without it.
 
 **Must have before public launch**
 
-1. Dockerfile + `docker-compose.prod.yml`: only nginx public, Redis password, RabbitMQ user, management UI off (NFR-DL1, DL2, S11).
-2. Upgrade Go toolchain to the latest 1.26.x patch and `amqp091-go`; add `govulncheck` to CI (NFR-S10).
-3. CI pipeline: `go test ./...`, `golangci-lint`, `govulncheck` (NFR-DL3).
-4. MySQL backups + Redis AOF (NFR-D3, D4).
+1. ~~Dockerfile + prod compose, Redis/RabbitMQ auth~~ ✅ done
+2. ~~Go toolchain + dependency upgrades, `govulncheck`~~ ✅ done
+3. ~~CI pipeline~~ ✅ done (verify on first GitHub run)
+4. MySQL backups (NFR-D3). Redis AOF is done.
 5. Abuse handling: Safe Browsing check on create and a way to disable a link (FR-L10). Public shorteners get abused within days.
 6. Enforce `quota_daily` (FR-L9).
 7. Recover middleware + per-request access log (NFR-R9, OB1).
@@ -186,10 +186,10 @@ Ordered by risk if you launch without it.
 11. Logout, password reset, email verification, revoke-all-sessions (FR-A8–A11).
 12. RabbitMQ connection reconnect in publisher (NFR-R5).
 13. Atomic lockout increment (Lua or `SET NX EX` + `INCR`) (NFR-R7).
-14. Automated migrations in deploy (NFR-D2).
 
 **Later**
 
+14. Push images to a registry from CI and deploy by tag (NFR-DL4).
 15. Per-day analytics + stats API (FR-S2, S3).
 16. JWT `kid` + key rotation (NFR-S9).
 17. Load test and capacity target (NFR-P5).

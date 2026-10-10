@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/april/shorten-link/internal/handler"
+	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -196,5 +198,35 @@ func TestAuthHandler_Refresh_MissingToken(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+func TestAuthHandler_Register_WeakPassword(t *testing.T) {
+	mux := newAuthMux(&mockAuthSvc{
+		registerFn: func(_ context.Context, _, _ string) (*service.TokenPair, error) {
+			return nil, service.ErrWeakPassword
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/api/auth/register",
+		bytes.NewBufferString(`{"email":"a@b.com","password":"short"}`))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+func TestAuthHandler_Register_BodyTooLarge(t *testing.T) {
+	mux := newAuthMux(&mockAuthSvc{})
+	big := `{"email":"a@b.com","password":"` + strings.Repeat("a", 2<<20) + `"}`
+
+	req := httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(big))
+	w := httptest.NewRecorder()
+	middleware.MaxBodySize(mux).ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("want 413, got %d", w.Code)
 	}
 }

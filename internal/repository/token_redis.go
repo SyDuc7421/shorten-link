@@ -30,13 +30,13 @@ func (c *tokenRedis) StoreRefreshToken(ctx context.Context, tokenID string, user
 	return nil
 }
 
-func (c *tokenRedis) GetRefreshToken(ctx context.Context, tokenID string) (int64, error) {
-	val, err := c.rdb.Get(ctx, tokenPrefix+tokenID).Result()
+func (c *tokenRedis) ConsumeRefreshToken(ctx context.Context, tokenID string) (int64, error) {
+	val, err := c.rdb.GetDel(ctx, tokenPrefix+tokenID).Result()
 	if errors.Is(err, redis.Nil) {
 		return 0, service.ErrNotFound
 	}
 	if err != nil {
-		return 0, fmt.Errorf("token cache: get: %w", err)
+		return 0, fmt.Errorf("token cache: consume: %w", err)
 	}
 	id, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
@@ -45,14 +45,18 @@ func (c *tokenRedis) GetRefreshToken(ctx context.Context, tokenID string) (int64
 	return id, nil
 }
 
-func (c *tokenRedis) DeleteRefreshToken(ctx context.Context, tokenID string) error {
-	if err := c.rdb.Del(ctx, tokenPrefix+tokenID).Err(); err != nil {
-		return fmt.Errorf("token cache: delete: %w", err)
-	}
-	return nil
-}
-
 const lockoutPrefix = "lockout:"
+
+func (c *tokenRedis) GetLockout(ctx context.Context, email string) (int64, error) {
+	n, err := c.rdb.Get(ctx, lockoutPrefix+email).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("token cache: get lockout: %w", err)
+	}
+	return n, nil
+}
 
 func (c *tokenRedis) IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error) {
 	key := lockoutPrefix + email

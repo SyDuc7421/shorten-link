@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -298,5 +299,49 @@ func TestLinkMySQL_ListByUser_ReturnsTimestamps(t *testing.T) {
 	}
 	if links[0].CreatedAt.IsZero() {
 		t.Error("created_at is zero")
+	}
+}
+
+func TestUserMySQL_Create_DuplicateEmail(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewUserMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.User{ID: 1, Email: "dup@x.com", PasswordHash: "h", Plan: "free"}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	err := repo.Create(ctx, &service.User{ID: 2, Email: "dup@x.com", PasswordHash: "h", Plan: "free"})
+	if !errors.Is(err, service.ErrEmailTaken) {
+		t.Errorf("want ErrEmailTaken, got %v", err)
+	}
+}
+
+func TestTokenRedis_ConsumeRefreshToken_OnlyOnce(t *testing.T) {
+	rdb := setupRedis(t)
+	tokens := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	tokens.StoreRefreshToken(ctx, "tid", 42, time.Minute) //nolint:errcheck
+	uid, err := tokens.ConsumeRefreshToken(ctx, "tid")
+	if err != nil || uid != 42 {
+		t.Fatalf("first consume: uid=%d err=%v", uid, err)
+	}
+	if _, err := tokens.ConsumeRefreshToken(ctx, "tid"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("second consume: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTokenRedis_GetLockout(t *testing.T) {
+	rdb := setupRedis(t)
+	tokens := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	if n, err := tokens.GetLockout(ctx, "a@b.com"); err != nil || n != 0 {
+		t.Fatalf("fresh lockout: n=%d err=%v", n, err)
+	}
+	tokens.IncrLockout(ctx, "a@b.com", time.Minute) //nolint:errcheck
+	tokens.IncrLockout(ctx, "a@b.com", time.Minute) //nolint:errcheck
+	if n, err := tokens.GetLockout(ctx, "a@b.com"); err != nil || n != 2 {
+		t.Errorf("after 2 incr: n=%d err=%v", n, err)
 	}
 }

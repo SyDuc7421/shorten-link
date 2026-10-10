@@ -57,7 +57,11 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		URL       string  `json:"url"`
 		ExpiresAt *string `json:"expires_at"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.URL == "" {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if writeIfTooLarge(w, err) {
+		return
+	}
+	if err != nil || body.URL == "" {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -74,7 +78,11 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 
 	link, err := h.svc.Shorten(r.Context(), userID, body.URL, expiresAt)
 	if errors.Is(err, service.ErrInvalidURL) {
-		writeError(w, http.StatusBadRequest, "URL must use http or https")
+		writeError(w, http.StatusBadRequest, "URL must be a valid http(s) URL with a resolvable host")
+		return
+	}
+	if errors.Is(err, service.ErrInvalidExpiry) {
+		writeError(w, http.StatusBadRequest, "expires_at must be in the future")
 		return
 	}
 	if errors.Is(err, service.ErrForbiddenURL) {

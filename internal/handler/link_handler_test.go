@@ -7,11 +7,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/april/shorten-link/internal/ctxkey"
 	"github.com/april/shorten-link/internal/handler"
+	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -293,5 +295,38 @@ func TestLinkHandler_List_NextCursorWhenFull(t *testing.T) {
 	cursor, _ := resp["next_cursor"].(string)
 	if cursor == "" {
 		t.Error("want non-empty next_cursor when page is full")
+	}
+}
+
+func TestLinkHandler_Shorten_ExpiryInPast(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		shortenFn: func(_ context.Context, _ int64, _ string, _ *time.Time) (*service.Link, error) {
+			return nil, service.ErrInvalidExpiry
+		},
+	})
+
+	req := withUserID(
+		httptest.NewRequest("POST", "/api/links",
+			bytes.NewBufferString(`{"url":"https://x.com","expires_at":"2000-01-01T00:00:00Z"}`)),
+		1,
+	)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+func TestLinkHandler_Shorten_BodyTooLarge(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{})
+	big := `{"url":"https://x.com/` + strings.Repeat("a", 2<<20) + `"}`
+
+	req := withUserID(httptest.NewRequest("POST", "/api/links", strings.NewReader(big)), 1)
+	w := httptest.NewRecorder()
+	middleware.MaxBodySize(mux).ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("want 413, got %d", w.Code)
 	}
 }

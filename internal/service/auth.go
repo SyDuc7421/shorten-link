@@ -18,6 +18,9 @@ var ErrInvalidToken = errors.New("service: invalid or expired token")
 // ErrAccountLocked is returned after too many consecutive failed login attempts.
 var ErrAccountLocked = errors.New("service: account temporarily locked")
 
+// ErrWeakPassword is returned when a password is shorter than 8 or longer than 72 bytes.
+var ErrWeakPassword = errors.New("service: password must be 8-72 bytes")
+
 // User is the auth domain model.
 type User struct {
 	ID           int64
@@ -39,9 +42,10 @@ type UserRepository interface {
 // TokenCache manages refresh tokens in Redis.
 type TokenCache interface {
 	StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration) error
-	GetRefreshToken(ctx context.Context, tokenID string) (int64, error)
-	DeleteRefreshToken(ctx context.Context, tokenID string) error
+	// ConsumeRefreshToken atomically reads and deletes a refresh token.
+	ConsumeRefreshToken(ctx context.Context, tokenID string) (int64, error)
 	// Lockout methods used by AuthService.
+	GetLockout(ctx context.Context, email string) (int64, error)
 	IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error)
 	DeleteLockout(ctx context.Context, email string) error
 }

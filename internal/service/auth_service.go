@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -21,7 +22,17 @@ const (
 	bcryptCost      = 12
 	lockoutMax      = 5
 	lockoutTTL      = 15 * time.Minute
+	minPasswordLen  = 8
+	maxPasswordLen  = 72 // bcrypt input limit
 )
+
+// dummyHash is compared against when the email is unknown so that login
+// takes the same time whether or not the account exists.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password"), bcryptCost)
+
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
 
 // AuthService handles user registration, login, and token refresh.
 type AuthService struct {
@@ -51,6 +62,11 @@ func NewAuthService(
 
 // Register creates a new user and returns a token pair.
 func (s *AuthService) Register(ctx context.Context, email, password string) (*TokenPair, error) {
+	email = normalizeEmail(email)
+	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
+		return nil, ErrWeakPassword
+	}
+
 	if _, err := s.users.GetByEmail(ctx, email); err == nil {
 		return nil, ErrEmailTaken
 	} else if !errors.Is(err, ErrNotFound) {
@@ -79,17 +95,28 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*To
 // Login verifies credentials and returns a token pair.
 // Accounts are locked for lockoutTTL after lockoutMax consecutive failures.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*TokenPair, error) {
-	user, err := s.users.GetByEmail(ctx, email)
-	if errors.Is(err, ErrNotFound) {
-		// Still increment lockout counter to prevent user-enumeration timing attacks.
-		s.tokens.IncrLockout(ctx, email, lockoutTTL) //nolint:errcheck
-		return nil, ErrInvalidCredentials
-	}
+	email = normalizeEmail(email)
+
+	failures, err := s.tokens.GetLockout(ctx, email)
 	if err != nil {
+		return nil, fmt.Errorf("service: login lockout lookup: %w", err)
+	}
+	if failures >= lockoutMax {
+		return nil, ErrAccountLocked
+	}
+
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, fmt.Errorf("service: login lookup: %w", err)
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+	// Unknown emails still run bcrypt and count toward lockout so they are
+	// indistinguishable from wrong passwords by timing or response.
+	hash := dummyHash
+	if user != nil {
+		hash = []byte(user.PasswordHash)
+	}
+	if err := bcrypt.CompareHashAndPassword(hash, []byte(password)); err != nil || user == nil {
 		count, _ := s.tokens.IncrLockout(ctx, email, lockoutTTL)
 		if count >= lockoutMax {
 			return nil, ErrAccountLocked
@@ -110,17 +137,13 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 		return nil, ErrInvalidToken
 	}
 
-	userID, err := s.tokens.GetRefreshToken(ctx, tokenID)
+	// consume atomically (rotation) so concurrent reuse can only succeed once
+	userID, err := s.tokens.ConsumeRefreshToken(ctx, tokenID)
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrInvalidToken
 	}
 	if err != nil {
-		return nil, fmt.Errorf("service: refresh lookup: %w", err)
-	}
-
-	// consume the token (rotation — invalidate before issuing new)
-	if err := s.tokens.DeleteRefreshToken(ctx, tokenID); err != nil {
-		return nil, fmt.Errorf("service: refresh delete: %w", err)
+		return nil, fmt.Errorf("service: refresh consume: %w", err)
 	}
 
 	return s.issueTokenPair(ctx, userID)

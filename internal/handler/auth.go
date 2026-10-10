@@ -39,12 +39,20 @@ func (h *AuthHandler) RegisterUser(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" || body.Password == "" {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if writeIfTooLarge(w, err) {
+		return
+	}
+	if err != nil || body.Email == "" || body.Password == "" {
 		writeError(w, http.StatusBadRequest, "email and password are required")
 		return
 	}
 
 	pair, err := h.svc.Register(r.Context(), body.Email, body.Password)
+	if errors.Is(err, service.ErrWeakPassword) {
+		writeError(w, http.StatusBadRequest, "password must be 8-72 characters")
+		return
+	}
 	if errors.Is(err, service.ErrEmailTaken) {
 		writeError(w, http.StatusConflict, "email already registered")
 		return
@@ -63,7 +71,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" || body.Password == "" {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if writeIfTooLarge(w, err) {
+		return
+	}
+	if err != nil || body.Email == "" || body.Password == "" {
 		writeError(w, http.StatusBadRequest, "email and password are required")
 		return
 	}
@@ -90,7 +102,11 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RefreshToken == "" {
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if writeIfTooLarge(w, err) {
+		return
+	}
+	if err != nil || body.RefreshToken == "" {
 		writeError(w, http.StatusBadRequest, "refresh_token is required")
 		return
 	}

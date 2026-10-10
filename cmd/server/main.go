@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/april/shorten-link/config"
@@ -112,20 +113,7 @@ func main() {
 	linkHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
 
-	// rate limiting
-	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)
-	createRL := middleware.RateLimit(rdb, "create", 10, time.Minute)
-
-	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path != "/healthz" && !isAPIPath(r.URL.Path):
-			redirectRL(mux).ServeHTTP(w, r)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/links":
-			createRL(mux).ServeHTTP(w, r)
-		default:
-			mux.ServeHTTP(w, r)
-		}
-	})
+	root := withRateLimits(mux, rdb)
 
 	// Middleware chain (outermost → innermost):
 	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → root
@@ -163,6 +151,33 @@ func main() {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
 	log.Info("stopped")
+}
+
+// withRateLimits applies per-IP limits to the abuse-prone routes. Login and
+// register run bcrypt (~0.25s CPU each), so they are limited tightly.
+func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
+	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)(mux)
+	createRL := middleware.RateLimit(rdb, "create", 10, time.Minute)(mux)
+	loginRL := middleware.RateLimit(rdb, "login", 10, time.Minute)(mux)
+	registerRL := middleware.RateLimit(rdb, "register", 5, time.Hour)(mux)
+	refreshRL := middleware.RateLimit(rdb, "refresh", 30, time.Minute)(mux)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path != "/healthz" && !isAPIPath(r.URL.Path):
+			redirectRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/links":
+			createRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
+			loginRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/register":
+			registerRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/refresh":
+			refreshRL.ServeHTTP(w, r)
+		default:
+			mux.ServeHTTP(w, r)
+		}
+	})
 }
 
 func newServer(port int, h http.Handler) *http.Server {

@@ -90,7 +90,7 @@ WAF, captcha, payments.
 | NFR-S1 | TLS only; HTTP redirects to HTTPS; HSTS | ✅ nginx + app header |
 | NFR-S2 | Security headers (CSP, X-Frame-Options, nosniff, Referrer-Policy) | ✅ |
 | NFR-S3 | CORS allow-list from config, deny by default | ✅ |
-| NFR-S4 | Rate limits per client IP: redirect 60/min, create 10/min; client cannot spoof its IP | ✅ trusts `X-Real-IP` only from private/loopback peers |
+| NFR-S4 | Rate limits per client IP on redirect, create and auth endpoints; client cannot spoof its IP | ✅ trusts `X-Real-IP` only from private/loopback peers |
 | NFR-S5 | Request body ≤ 1 MB (413 otherwise) | ✅ |
 | NFR-S6 | SSRF/abuse guard cannot be bypassed by DNS changes after creation | ⚠️ DNS checked once at creation; the server never fetches URLs, so impact is limited to abuse |
 | NFR-S7 | Slow-client protection (header/read/write/idle timeouts) | ✅ |
@@ -156,6 +156,8 @@ WAF, captcha, payments.
 | DNS lookup / publish timeout | 2s each | `service/link_service.go` |
 | Redirect rate limit | 60 / min / IP | `cmd/server/main.go` |
 | Create rate limit | 10 / min / IP | `cmd/server/main.go` |
+| Login / refresh rate limit | 10 / min, 30 / min per IP | `cmd/server/main.go` |
+| Register rate limit | 5 / hour / IP | `cmd/server/main.go` |
 | nginx rate limit | 100 r/s / IP, burst 200 | `deploy/nginx/nginx.conf` |
 | Request timeout | 10s | `cmd/server/main.go` |
 | Max body | 1 MB app, 2 MB nginx | `middleware/bodysize.go` |

@@ -149,7 +149,7 @@ Every request passes through these, outermost first:
 | 4 | `JWTAuth` | If a valid `Authorization: Bearer` token is present, put the user ID in the request context |
 | 5 | `RequestID` | Reuse or create `X-Request-ID`; attach it to the logger |
 | 6 | `MaxBodySize` | Reject bodies over 1 MB (413) |
-| 7 | `RateLimit` | Per-IP sliding window, only on redirects and `POST /api/links` |
+| 7 | `RateLimit` | Per-IP sliding window on redirects, `POST /api/links` and `/api/auth/*` (see spec §4) |
 | 8 | `RequireAuth` | Only on protected routes; returns 401 if step 4 found no user |
 
 ### Routes

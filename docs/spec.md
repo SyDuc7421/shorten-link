@@ -42,7 +42,7 @@ WAF, captcha, payments.
 | ID | Requirement | Status |
 |---|---|---|
 | FR-L1 | Authenticated user shortens an `http`/`https` URL and gets a unique short code | ✅ |
-| FR-L2 | Optional `expires_at` (RFC 3339), must be in the future | ✅ |
+| FR-L2 | Optional `expires_at` (RFC 3339), must be in the future; any year (no 2038 limit) | ✅ |
 | FR-L3 | URLs that point to private, loopback, link-local, CGNAT or unresolvable hosts are rejected | ✅ checked at creation only (see NFR-S6) |
 | FR-L4 | Anyone opening `/{code}` gets a `302` to the original URL | ✅ |
 | FR-L5 | Expired or deleted links return `404` | ✅ |
@@ -108,7 +108,7 @@ WAF, captcha, payments.
 | NFR-R2 | Worker exits non-zero when a consumer dies, so it is restarted | ✅ |
 | NFR-R3 | A failing click batch cannot loop forever | ✅ retried once, then DLQ |
 | NFR-R4 | Redis outage does not break redirects | ✅ rate limiter fails open |
-| NFR-R5 | Publisher recovers from a dropped RabbitMQ connection | ❌ reopens channels only; needs restart (healthz turns 503) |
+| NFR-R5 | Publisher recovers from a dropped RabbitMQ connection | ✅ background reconnect; server also starts without RabbitMQ |
 | NFR-R6 | Dead-lettered clicks can be replayed | ❌ DLQ consumer logs and acks |
 | NFR-R7 | Lockout counter can never become permanent | ⚠️ `INCR` and `EXPIRE` are separate calls; crash between them leaves a key without TTL |
 | NFR-R8 | Concurrent workers cannot deadlock on click updates | ⚠️ rows updated in map order; sort codes before updating if running >1 worker |
@@ -186,13 +186,12 @@ Ordered by risk if you launch without it.
 9. Metrics + dashboards + alerts on 5xx rate, DLQ depth, dependency health (FR-O3, NFR-OB2, OB3).
 10. Split `/livez` and `/readyz` (FR-O2).
 11. Logout, password reset, email verification, revoke-all-sessions (FR-A8–A11).
-12. RabbitMQ connection reconnect in publisher (NFR-R5).
-13. Atomic lockout increment (Lua or `SET NX EX` + `INCR`) (NFR-R7).
+12. Atomic lockout increment (Lua or `SET NX EX` + `INCR`) (NFR-R7).
 
 **Later**
 
-14. Push images to a registry from CI and deploy by tag (NFR-DL4).
-15. Per-day analytics + stats API (FR-S2, S3).
-16. JWT `kid` + key rotation (NFR-S9).
-17. Load test and capacity target (NFR-P5).
-18. Audit log (NFR-S12).
+13. Push images to a registry from CI and deploy by tag (NFR-DL4).
+14. Per-day analytics + stats API (FR-S2, S3).
+15. JWT `kid` + key rotation (NFR-S9).
+16. Load test and capacity target (NFR-P5).
+17. Audit log (NFR-S12).

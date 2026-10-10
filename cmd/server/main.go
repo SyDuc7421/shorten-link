@@ -53,21 +53,9 @@ func main() {
 	defer rdb.Close()
 	log.Info("Redis connected")
 
-	mqConn, err := cfg.DialRabbitMQ()
-	if err != nil {
-		log.Fatal("failed to connect RabbitMQ", zap.Error(err))
-	}
-	defer mqConn.Close()
-	log.Info("RabbitMQ connected")
-
-	if err := messaging.Setup(mqConn); err != nil {
-		log.Fatal("failed to setup messaging", zap.Error(err))
-	}
-
-	pub, err := messaging.NewPublisher(mqConn, log)
-	if err != nil {
-		log.Fatal("failed to create publisher", zap.Error(err))
-	}
+	// Click events are best effort: the server starts and keeps serving
+	// redirects while RabbitMQ is down, and the publisher reconnects on its own.
+	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
 
 	// RSA keys for JWT
@@ -95,7 +83,7 @@ func main() {
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
 	authHandler := handler.NewAuthHandler(authSvc)
-	healthHandler := handler.NewHealthChecker(db, rdb, mqConn)
+	healthHandler := handler.NewHealthChecker(db, rdb, pub)
 
 	// CORS origins from config
 	var allowedOrigins []string

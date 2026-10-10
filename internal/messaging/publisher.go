@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -11,22 +12,90 @@ import (
 	"go.uber.org/zap"
 )
 
+// reconnectDelay is the pause between reconnect attempts.
+var reconnectDelay = 2 * time.Second
+
 // Publisher publishes events to RabbitMQ. It satisfies service.Publisher.
-// It reconnects automatically when the underlying channel is closed.
+// A background loop re-dials whenever the connection drops, so Publish fails
+// fast while the broker is away and recovers without a process restart.
 type Publisher struct {
 	mu   sync.Mutex
+	dial func() (*amqp.Connection, error)
 	conn *amqp.Connection
 	ch   *amqp.Channel
 	log  *zap.Logger
+
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
-// NewPublisher opens a channel on conn and returns a ready Publisher.
-func NewPublisher(conn *amqp.Connection, log *zap.Logger) (*Publisher, error) {
-	p := &Publisher{conn: conn, log: log}
-	if err := p.openChannel(); err != nil {
-		return nil, err
+// NewPublisher connects using dial. It does not fail if the broker is
+// unreachable; it keeps retrying in the background instead.
+func NewPublisher(dial func() (*amqp.Connection, error), log *zap.Logger) *Publisher {
+	p := &Publisher{dial: dial, log: log, done: make(chan struct{})}
+	if err := p.connect(); err != nil {
+		log.Warn("rabbitmq unavailable, will retry", zap.Error(err))
 	}
-	return p, nil
+	go p.reconnectLoop()
+	return p
+}
+
+// connect dials, declares the topology and opens a channel. The dial happens
+// without p.mu held so Publish never waits on network I/O.
+func (p *Publisher) connect() error {
+	conn, err := p.dial()
+	if err != nil {
+		return err
+	}
+	if err := Setup(conn); err != nil {
+		conn.Close()
+		return err
+	}
+	ch, err := conn.Channel()
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	p.mu.Lock()
+	p.conn, p.ch = conn, ch
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *Publisher) reconnectLoop() {
+	for {
+		p.mu.Lock()
+		conn := p.conn
+		p.mu.Unlock()
+
+		if conn != nil && !conn.IsClosed() {
+			closed := conn.NotifyClose(make(chan *amqp.Error, 1))
+			select {
+			case err := <-closed: // nil on a clean close
+				p.log.Warn("rabbitmq connection lost", zap.Error(err))
+			case <-p.done:
+				return
+			}
+		}
+
+		select {
+		case <-time.After(reconnectDelay):
+		case <-p.done:
+			return
+		}
+		if err := p.connect(); err != nil {
+			p.log.Warn("rabbitmq reconnect failed", zap.Error(err))
+			continue
+		}
+		p.log.Info("rabbitmq reconnected")
+	}
+}
+
+// IsClosed reports whether the publisher currently has no live connection.
+func (p *Publisher) IsClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.conn == nil || p.conn.IsClosed()
 }
 
 func (p *Publisher) openChannel() error {
@@ -56,6 +125,9 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	if p.conn == nil || p.ch == nil {
+		return errors.New("publisher: not connected")
+	}
 	if err := p.ch.PublishWithContext(ctx, Exchange, routingKey, false, false, msg); err != nil {
 		p.log.Warn("publish failed, reopening channel", zap.Error(err))
 		if reopenErr := p.openChannel(); reopenErr != nil {
@@ -68,9 +140,13 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any)
 	return nil
 }
 
-// Close closes the underlying channel.
+// Close stops reconnecting and closes the connection.
 func (p *Publisher) Close() error {
+	p.closeOnce.Do(func() { close(p.done) })
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.ch.Close()
+	if p.conn == nil {
+		return nil
+	}
+	return p.conn.Close()
 }

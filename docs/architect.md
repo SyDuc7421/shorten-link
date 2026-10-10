@@ -261,3 +261,8 @@ Codes are therefore unique as long as **every server instance has a different
 | **worker** | work | work | work | delayed (queue grows) |
 
 `/healthz` returns 503 if any of MySQL, Redis or RabbitMQ is unreachable.
+
+The server does not need RabbitMQ to start or keep running: the publisher
+re-dials every 2s in the background and re-declares the exchange and queues
+when it reconnects. The worker exits when it loses RabbitMQ and is restarted
+by Docker.

@@ -126,6 +126,8 @@ github.com/testcontainers/testcontainers-go v0.42.0 h1:He3IhTzTZOygSXLJPMX7n44Xt
 github.com/testcontainers/testcontainers-go v0.42.0/go.mod h1:vZjdY1YmUA1qEForxOIOazfsrdyORJAbhi0bp8plN30=
 github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0 h1:Yhv1k7vDpyzZePntg5R5Oj4ZMCyWpAfpJeRu1ROsgiU=
 github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0/go.mod h1:Z7SCTuiZlghAdRjkv3Ir0iXJKC2T2avbtxLR0DRe+ng=
+github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0 h1:Psvaug2WredXSbKfw5dBOgqlGe8L8jxPAQYuRp5H7Rs=
+github.com/testcontainers/testcontainers-go/modules/rabbitmq v0.42.0/go.mod h1:IKlOzL4xsGYvVT3IS/S6yfhSvNXBvUobQcdmHEJxNZs=
 github.com/testcontainers/testcontainers-go/modules/redis v0.41.0 h1:QlTSe4JGOnjr/37MXx0GqNLGa+8sKQst7lsn7uLjg8E=
 github.com/testcontainers/testcontainers-go/modules/redis v0.41.0/go.mod h1:5mDOIWrS/a+z8gBesXBQAAQtrqJrW2tUi9Tf46+/Luo=
 github.com/tklauser/go-sysconf v0.3.16 h1:frioLaCQSsF5Cy1jgRBrzr6t502KIIwQ0MArYICU0nA=

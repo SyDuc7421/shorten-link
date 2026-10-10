@@ -255,3 +255,48 @@ func TestLinkRedis_Delete(t *testing.T) {
 		t.Errorf("want ErrNotFound after delete, got %v", err)
 	}
 }
+
+func TestLinkMySQL_GetByCode_ReturnsTimestamps(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (5, 'i@j.com', 'x')`) //nolint:errcheck
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	link := &service.Link{ID: 5000, UserID: 5, ShortCode: "exp0001", OriginalURL: "https://exp.com", ExpiresAt: &exp}
+	if err := repo.Create(ctx, link); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.GetByCode(ctx, "exp0001")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", got.ExpiresAt, exp)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Error("created_at is zero")
+	}
+}
+
+func TestLinkMySQL_ListByUser_ReturnsTimestamps(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (6, 'k@l.com', 'x')`) //nolint:errcheck
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	repo.Create(ctx, &service.Link{ID: 6000, UserID: 6, ShortCode: "exp0002", OriginalURL: "https://exp.com", ExpiresAt: &exp}) //nolint:errcheck
+
+	links, err := repo.ListByUser(ctx, 6, 0, 20)
+	if err != nil || len(links) != 1 {
+		t.Fatalf("list: %v (%d links)", err, len(links))
+	}
+	if links[0].ExpiresAt == nil || !links[0].ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", links[0].ExpiresAt, exp)
+	}
+	if links[0].CreatedAt.IsZero() {
+		t.Error("created_at is zero")
+	}
+}

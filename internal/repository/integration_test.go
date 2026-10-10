@@ -64,6 +64,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"001_create_users.up.sql",
 		"002_create_links.up.sql",
 		"003_create_analytics.up.sql",
+		"004_links_expires_at_datetime.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -343,5 +344,24 @@ func TestTokenRedis_GetLockout(t *testing.T) {
 	tokens.IncrLockout(ctx, "a@b.com", time.Minute) //nolint:errcheck
 	if n, err := tokens.GetLockout(ctx, "a@b.com"); err != nil || n != 2 {
 		t.Errorf("after 2 incr: n=%d err=%v", n, err)
+	}
+}
+
+func TestLinkMySQL_Create_ExpiryAfter2038(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (7, 'm@n.com', 'x')`) //nolint:errcheck
+	exp := time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := repo.Create(ctx, &service.Link{ID: 7000, UserID: 7, ShortCode: "y2040", OriginalURL: "https://x.com", ExpiresAt: &exp}); err != nil {
+		t.Fatalf("create with 2040 expiry: %v", err)
+	}
+	got, err := repo.GetByCode(ctx, "y2040")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", got.ExpiresAt, exp)
 	}
 }

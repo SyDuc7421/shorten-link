@@ -8,7 +8,7 @@ How people and AI coding agents work on this codebase. Read
 
 ## 1. Set up
 
-**You need:** Go 1.25+, Docker (for local services and integration tests),
+**You need:** Go 1.26+ (go.mod pins toolchain 1.26.9; `GOTOOLCHAIN=auto` downloads it), Docker (for local services and integration tests),
 `openssl`, and optionally `golang-migrate` and `golangci-lint`.
 
 ```bash

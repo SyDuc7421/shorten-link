@@ -10,6 +10,7 @@ bin/
 .gitignore
 .dockerignore
 .golangci.yml
+.gitguardian.yaml
 
 # docs & planning
 *.md

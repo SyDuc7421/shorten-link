@@ -1,0 +1,5 @@
+version: 2
+secret:
+  ignored_paths:
+    # ${VAR} interpolations in connection URLs trip the Generic Password detector
+    - docker-compose.prod.yml

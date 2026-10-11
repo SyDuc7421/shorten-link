@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/april/shorten-link/internal/service"
 )
+
+const mysqlErrDuplicateEntry = 1062
 
 type userMySQL struct {
 	db *sqlx.DB
@@ -31,6 +34,10 @@ func (r *userMySQL) Create(ctx context.Context, user *service.User) error {
 		"plan":          user.Plan,
 		"quota_daily":   user.QuotaDaily,
 	})
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) && myErr.Number == mysqlErrDuplicateEntry {
+		return service.ErrEmailTaken
+	}
 	if err != nil {
 		return fmt.Errorf("repository: create user: %w", err)
 	}

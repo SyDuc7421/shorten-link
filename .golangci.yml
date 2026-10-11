@@ -1,0 +1,8 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # Close() errors on shutdown/cleanup paths carry nothing actionable.
+      - linters: [errcheck]
+        source: '\.Close\(\)'

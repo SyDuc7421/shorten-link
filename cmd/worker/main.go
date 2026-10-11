@@ -84,21 +84,35 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	if waitForShutdown(log, quit, errc, cancel, 2) {
+		log.Error("worker stopped after consumer failure")
+		log.Sync() //nolint:errcheck // os.Exit skips deferred Sync
+		os.Exit(1)
+	}
+	log.Info("worker stopped")
+}
+
+// waitForShutdown blocks until a signal arrives or any consumer exits, then
+// cancels ctx and waits for all n consumers to return. It reports failed=true
+// when a consumer exited on its own, so the process can exit non-zero.
+func waitForShutdown(log *zap.Logger, quit <-chan os.Signal, errc <-chan error, cancel context.CancelFunc, n int) (failed bool) {
+	remaining := n
 	select {
 	case sig := <-quit:
 		log.Info("signal received, shutting down", zap.String("signal", sig.String()))
 		cancel()
 	case err := <-errc:
-		log.Error("consumer error", zap.Error(err))
+		log.Error("consumer exited", zap.Error(err))
+		remaining--
+		failed = true
 		cancel()
 	}
 
-	// drain both consumers
-	for i := 0; i < 2; i++ {
+	// drain the consumers still running
+	for i := 0; i < remaining; i++ {
 		if err := <-errc; err != nil {
 			log.Error("consumer shutdown error", zap.Error(err))
 		}
 	}
-
-	log.Info("worker stopped")
+	return failed
 }

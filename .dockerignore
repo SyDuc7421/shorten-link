@@ -10,6 +10,7 @@ bin/
 .gitignore
 .dockerignore
 .golangci.yml
+.gitguardian.yaml
 
 # docs & planning
 *.md
@@ -22,3 +23,11 @@ coverage.html
 # IDE
 .idea/
 .vscode/
+
+# local tooling and stray binaries
+.claude/
+.serena/
+.codegraph/
+/worker
+/server
+docs/

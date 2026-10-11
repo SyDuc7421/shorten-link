@@ -101,3 +101,76 @@ func TestRateLimit_SeparatePerIP(t *testing.T) {
 		t.Errorf("IP B first request: want 200, got %d (should not share limit with IP A)", w3.Code)
 	}
 }
+
+func TestRateLimit_IgnoresSpoofedXForwardedFor(t *testing.T) {
+	rdb := setupTestRedis(t)
+	limiter := middleware.RateLimit(rdb, "test-xff", 1, time.Minute)(okHandler())
+
+	for i, xff := range []string{"1.1.1.1", "2.2.2.2"} {
+		req := requestFrom("203.0.113.5")
+		req.Header.Set("X-Forwarded-For", xff)
+		w := httptest.NewRecorder()
+		limiter.ServeHTTP(w, req)
+		if i == 1 && w.Code != http.StatusTooManyRequests {
+			t.Errorf("spoofed XFF bypassed limit: got %d", w.Code)
+		}
+	}
+}
+
+func TestRateLimit_UsesXRealIPFromTrustedProxy(t *testing.T) {
+	rdb := setupTestRedis(t)
+	limiter := middleware.RateLimit(rdb, "test-realip", 1, time.Minute)(okHandler())
+
+	for _, ip := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := requestFrom("172.18.0.2") // nginx on the private network
+		req.Header.Set("X-Real-IP", ip)
+		w := httptest.NewRecorder()
+		limiter.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("client %s behind proxy: want 200, got %d", ip, w.Code)
+		}
+	}
+}
+
+func TestRateLimit_IgnoresXRealIPFromPublicPeer(t *testing.T) {
+	rdb := setupTestRedis(t)
+	limiter := middleware.RateLimit(rdb, "test-realip-pub", 1, time.Minute)(okHandler())
+
+	for i, ip := range []string{"198.51.100.1", "198.51.100.2"} {
+		req := requestFrom("203.0.113.9")
+		req.Header.Set("X-Real-IP", ip)
+		w := httptest.NewRecorder()
+		limiter.ServeHTTP(w, req)
+		if i == 1 && w.Code != http.StatusTooManyRequests {
+			t.Errorf("spoofed X-Real-IP bypassed limit: got %d", w.Code)
+		}
+	}
+}
+
+func TestRateLimit_RejectionHeaders(t *testing.T) {
+	rdb := setupTestRedis(t)
+	limiter := middleware.RateLimit(rdb, "test-headers", 1, 30*time.Second)(okHandler())
+
+	limiter.ServeHTTP(httptest.NewRecorder(), requestFrom("10.0.0.9"))
+	w := httptest.NewRecorder()
+	limiter.ServeHTTP(w, requestFrom("10.0.0.9"))
+
+	if got := w.Header().Get("Retry-After"); got != "30" {
+		t.Errorf("Retry-After: want 30, got %q", got)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type: want application/json, got %q", got)
+	}
+}
+
+func TestRateLimit_FailsOpenWhenRedisDown(t *testing.T) {
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
+	t.Cleanup(func() { rdb.Close() })
+	limiter := middleware.RateLimit(rdb, "test-down", 1, time.Minute)(okHandler())
+
+	w := httptest.NewRecorder()
+	limiter.ServeHTTP(w, requestFrom("10.0.0.10"))
+	if w.Code != http.StatusOK {
+		t.Errorf("want 200 when Redis unavailable, got %d", w.Code)
+	}
+}

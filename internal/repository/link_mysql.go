@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -48,9 +49,9 @@ func (r *linkMySQL) GetByCode(ctx context.Context, code string) (*service.Link, 
 		ShortCode   string     `db:"short_code"`
 		OriginalURL string     `db:"original_url"`
 		Clicks      int64      `db:"clicks"`
-		ExpiresAt   *string    `db:"expires_at"`
-		CreatedAt   string     `db:"created_at"`
-		UpdatedAt   string     `db:"updated_at"`
+		ExpiresAt   *time.Time `db:"expires_at"`
+		CreatedAt   time.Time  `db:"created_at"`
+		UpdatedAt   time.Time  `db:"updated_at"`
 	}
 	if err := r.db.GetContext(ctx, &row, q, code); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -65,6 +66,9 @@ func (r *linkMySQL) GetByCode(ctx context.Context, code string) (*service.Link, 
 		ShortCode:   row.ShortCode,
 		OriginalURL: row.OriginalURL,
 		Clicks:      row.Clicks,
+		ExpiresAt:   row.ExpiresAt,
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
 	}
 	return link, nil
 }
@@ -101,14 +105,14 @@ func (r *linkMySQL) ListByUser(ctx context.Context, userID int64, afterID int64,
 	var links []*service.Link
 	for rows.Next() {
 		var row struct {
-			ID          int64   `db:"id"`
-			UserID      int64   `db:"user_id"`
-			ShortCode   string  `db:"short_code"`
-			OriginalURL string  `db:"original_url"`
-			Clicks      int64   `db:"clicks"`
-			ExpiresAt   *string `db:"expires_at"`
-			CreatedAt   string  `db:"created_at"`
-			UpdatedAt   string  `db:"updated_at"`
+			ID          int64      `db:"id"`
+			UserID      int64      `db:"user_id"`
+			ShortCode   string     `db:"short_code"`
+			OriginalURL string     `db:"original_url"`
+			Clicks      int64      `db:"clicks"`
+			ExpiresAt   *time.Time `db:"expires_at"`
+			CreatedAt   time.Time  `db:"created_at"`
+			UpdatedAt   time.Time  `db:"updated_at"`
 		}
 		if err := rows.StructScan(&row); err != nil {
 			return nil, fmt.Errorf("repository: scan link: %w", err)
@@ -119,6 +123,9 @@ func (r *linkMySQL) ListByUser(ctx context.Context, userID int64, afterID int64,
 			ShortCode:   row.ShortCode,
 			OriginalURL: row.OriginalURL,
 			Clicks:      row.Clicks,
+			ExpiresAt:   row.ExpiresAt,
+			CreatedAt:   row.CreatedAt,
+			UpdatedAt:   row.UpdatedAt,
 		})
 	}
 	return links, rows.Err()

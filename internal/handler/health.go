@@ -6,20 +6,25 @@ import (
 	"net/http"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/jmoiron/sqlx"
 )
+
+// ConnStatus reports whether a connection is down (*amqp.Connection and
+// *messaging.Publisher both satisfy it).
+type ConnStatus interface {
+	IsClosed() bool
+}
 
 // HealthChecker holds the dependency clients used for liveness probes.
 type HealthChecker struct {
 	db   *sqlx.DB
 	rdb  *redis.Client
-	amqp *amqp.Connection
+	amqp ConnStatus
 }
 
 // NewHealthChecker constructs a HealthChecker.
-func NewHealthChecker(db *sqlx.DB, rdb *redis.Client, conn *amqp.Connection) *HealthChecker {
+func NewHealthChecker(db *sqlx.DB, rdb *redis.Client, conn ConnStatus) *HealthChecker {
 	return &HealthChecker{db: db, rdb: rdb, amqp: conn}
 }
 

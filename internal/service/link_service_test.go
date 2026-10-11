@@ -229,3 +229,63 @@ func TestListByUser_RepoError(t *testing.T) {
 		t.Error("expected error, got nil")
 	}
 }
+
+func TestShorten_ForbiddenAddresses(t *testing.T) {
+	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
+	for _, u := range []string{
+		"http://0.0.0.0/",
+		"http://[::]/",
+		"http://[fe80::1]/",
+		"http://100.64.0.1/",
+		"http://[::ffff:127.0.0.1]/",
+	} {
+		if _, err := svc.Shorten(context.Background(), 1, u, nil); !errors.Is(err, service.ErrForbiddenURL) {
+			t.Errorf("Shorten(%q): want ErrForbiddenURL, got %v", u, err)
+		}
+	}
+}
+
+func TestShorten_UnresolvableHost(t *testing.T) {
+	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
+	_, err := svc.Shorten(context.Background(), 1, "http://does-not-exist.invalid/", nil)
+	if !errors.Is(err, service.ErrInvalidURL) {
+		t.Errorf("want ErrInvalidURL, got %v", err)
+	}
+}
+
+func TestShorten_ExpiryInPast(t *testing.T) {
+	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
+	past := time.Now().Add(-time.Minute)
+	_, err := svc.Shorten(context.Background(), 1, "https://example.com", &past)
+	if !errors.Is(err, service.ErrInvalidExpiry) {
+		t.Errorf("want ErrInvalidExpiry, got %v", err)
+	}
+}
+
+// deadlinePublisher reports whether each Publish call received a context with a deadline.
+type deadlinePublisher struct{ hasDeadline chan bool }
+
+func (p deadlinePublisher) Publish(ctx context.Context, _ string, _ any) error {
+	_, ok := ctx.Deadline()
+	p.hasDeadline <- ok
+	return nil
+}
+
+func TestResolve_PublishesWithTimeout(t *testing.T) {
+	cache := newMockCache()
+	cache.store["abc"] = "https://cached.com"
+	pub := deadlinePublisher{hasDeadline: make(chan bool, 1)}
+	svc := service.NewLinkService(&mockRepo{}, cache, nil, pub)
+
+	if _, err := svc.Resolve(context.Background(), "abc"); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	select {
+	case ok := <-pub.hasDeadline:
+		if !ok {
+			t.Error("click event published without a deadline")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("click event not published")
+	}
+}

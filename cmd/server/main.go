@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"github.com/april/shorten-link/config"
@@ -52,21 +53,9 @@ func main() {
 	defer rdb.Close()
 	log.Info("Redis connected")
 
-	mqConn, err := cfg.DialRabbitMQ()
-	if err != nil {
-		log.Fatal("failed to connect RabbitMQ", zap.Error(err))
-	}
-	defer mqConn.Close()
-	log.Info("RabbitMQ connected")
-
-	if err := messaging.Setup(mqConn); err != nil {
-		log.Fatal("failed to setup messaging", zap.Error(err))
-	}
-
-	pub, err := messaging.NewPublisher(mqConn, log)
-	if err != nil {
-		log.Fatal("failed to create publisher", zap.Error(err))
-	}
+	// Click events are best effort: the server starts and keeps serving
+	// redirects while RabbitMQ is down, and the publisher reconnects on its own.
+	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
 
 	// RSA keys for JWT
@@ -76,7 +65,7 @@ func main() {
 	}
 
 	// ID generator
-	gen, err := idgen.NewGenerator(1) // nodeID 1; use a per-pod config field in k8s
+	gen, err := idgen.NewGenerator(cfg.NodeID)
 	if err != nil {
 		log.Fatal("failed to create ID generator", zap.Error(err))
 	}
@@ -94,7 +83,7 @@ func main() {
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
 	authHandler := handler.NewAuthHandler(authSvc)
-	healthHandler := handler.NewHealthChecker(db, rdb, mqConn)
+	healthHandler := handler.NewHealthChecker(db, rdb, pub)
 
 	// CORS origins from config
 	var allowedOrigins []string
@@ -112,20 +101,7 @@ func main() {
 	linkHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
 
-	// rate limiting
-	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)
-	createRL := middleware.RateLimit(rdb, "create", 10, time.Minute)
-
-	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path != "/healthz" && !isAPIPath(r.URL.Path):
-			redirectRL(mux).ServeHTTP(w, r)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/links":
-			createRL(mux).ServeHTTP(w, r)
-		default:
-			mux.ServeHTTP(w, r)
-		}
-	})
+	root := withRateLimits(mux, rdb)
 
 	// Middleware chain (outermost → innermost):
 	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → root
@@ -143,10 +119,7 @@ func main() {
 		`{"error":"request timeout"}`,
 	)
 
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Port),
-		Handler: chain,
-	}
+	srv := newServer(cfg.Port, chain)
 
 	go func() {
 		log.Info("server starting", zap.Int("port", cfg.Port))
@@ -166,6 +139,44 @@ func main() {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
 	log.Info("stopped")
+}
+
+// withRateLimits applies per-IP limits to the abuse-prone routes. Login and
+// register run bcrypt (~0.25s CPU each), so they are limited tightly.
+func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
+	redirectRL := middleware.RateLimit(rdb, "redirect", 60, time.Minute)(mux)
+	createRL := middleware.RateLimit(rdb, "create", 10, time.Minute)(mux)
+	loginRL := middleware.RateLimit(rdb, "login", 10, time.Minute)(mux)
+	registerRL := middleware.RateLimit(rdb, "register", 5, time.Hour)(mux)
+	refreshRL := middleware.RateLimit(rdb, "refresh", 30, time.Minute)(mux)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path != "/healthz" && !isAPIPath(r.URL.Path):
+			redirectRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/links":
+			createRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
+			loginRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/register":
+			registerRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/refresh":
+			refreshRL.ServeHTTP(w, r)
+		default:
+			mux.ServeHTTP(w, r)
+		}
+	})
+}
+
+func newServer(port int, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second, // > TimeoutHandler's 10s so its 503 body is written
+		IdleTimeout:       60 * time.Second,
+	}
 }
 
 func isAPIPath(path string) bool {

@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"errors"
-	"io"
 	"net/http"
 )
 
@@ -19,5 +18,5 @@ func MaxBodySize(next http.Handler) http.Handler {
 // IsBodyTooLarge reports whether err came from MaxBytesReader.
 func IsBodyTooLarge(err error) bool {
 	var maxErr *http.MaxBytesError
-	return errors.As(err, &maxErr) || errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.As(err, &maxErr)
 }

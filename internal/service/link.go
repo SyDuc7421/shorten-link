@@ -12,6 +12,9 @@ var ErrNotFound = errors.New("not found")
 // ErrForbiddenURL is returned when a URL targets a private/internal address (SSRF guard).
 var ErrForbiddenURL = errors.New("service: URL targets a forbidden address")
 
+// ErrInvalidExpiry is returned when expires_at is not in the future.
+var ErrInvalidExpiry = errors.New("service: expires_at must be in the future")
+
 // Link is the core domain model for a shortened URL.
 type Link struct {
 	ID          int64

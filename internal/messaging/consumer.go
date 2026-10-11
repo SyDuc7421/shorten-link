@@ -41,27 +41,12 @@ func (c *ClickConsumer) Start(ctx context.Context) error {
 		return err
 	}
 
-	counts := make(map[string]int64, batchSize)
-	pending := make([]amqp.Delivery, 0, batchSize)
+	batch := newClickBatch()
 	timer := time.NewTimer(flushEvery)
 	defer timer.Stop()
 
 	flush := func() {
-		if len(counts) == 0 {
-			return
-		}
-		if err := c.repo.BatchUpdateClicks(context.Background(), counts); err != nil {
-			c.log.Error("batch update clicks", zap.Error(err))
-			for _, d := range pending {
-				d.Nack(false, true) //nolint:errcheck // requeue on failure
-			}
-		} else {
-			for _, d := range pending {
-				d.Ack(false) //nolint:errcheck
-			}
-		}
-		counts = make(map[string]int64, batchSize)
-		pending = pending[:0]
+		batch.flush(context.Background(), c.repo, c.log)
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
@@ -86,9 +71,8 @@ func (c *ClickConsumer) Start(ctx context.Context) error {
 				d.Nack(false, false) //nolint:errcheck
 				continue
 			}
-			counts[evt.Code]++
-			pending = append(pending, d)
-			if len(pending) >= batchSize {
+			batch.add(d, evt.Code)
+			if len(batch.pending) >= batchSize {
 				flush()
 			}
 
@@ -100,6 +84,42 @@ func (c *ClickConsumer) Start(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// clickBatch accumulates click deliveries and their per-code counts.
+type clickBatch struct {
+	counts  map[string]int64
+	pending []amqp.Delivery
+}
+
+func newClickBatch() *clickBatch {
+	return &clickBatch{counts: make(map[string]int64, batchSize), pending: make([]amqp.Delivery, 0, batchSize)}
+}
+
+func (b *clickBatch) add(d amqp.Delivery, code string) {
+	b.counts[code]++
+	b.pending = append(b.pending, d)
+}
+
+// flush writes the counts and acks the deliveries, or nacks them on failure.
+func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log *zap.Logger) {
+	if len(b.counts) == 0 {
+		return
+	}
+	if err := repo.BatchUpdateClicks(ctx, b.counts); err != nil {
+		log.Error("batch update clicks", zap.Error(err))
+		// Retry once; a message that already failed is dead-lettered so a
+		// persistent DB error cannot loop the same batch forever.
+		for _, d := range b.pending {
+			d.Nack(false, !d.Redelivered) //nolint:errcheck
+		}
+	} else {
+		for _, d := range b.pending {
+			d.Ack(false) //nolint:errcheck
+		}
+	}
+	b.counts = make(map[string]int64, batchSize)
+	b.pending = b.pending[:0]
 }
 
 // DLQConsumer logs dead-letter messages and acknowledges them.

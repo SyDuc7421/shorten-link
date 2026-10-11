@@ -1,12 +1,12 @@
 package middleware
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -35,6 +35,7 @@ return 1
 // limit is the max requests per window duration.
 func RateLimit(rdb *redis.Client, action string, limit int, window time.Duration) func(http.Handler) http.Handler {
 	windowMS := window.Milliseconds()
+	retryAfter := strconv.Itoa(int(window.Seconds()))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := clientIP(r)
@@ -43,13 +44,16 @@ func RateLimit(rdb *redis.Client, action string, limit int, window time.Duration
 			member := uniqueMember()
 
 			allowed, err := slidingWindowScript.Run(
-				context.Background(), rdb,
+				r.Context(), rdb,
 				[]string{key},
 				now, windowMS, limit, member,
 			).Int()
-			if err != nil || allowed == 0 {
-				w.Header().Set("Retry-After", "60")
-				http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+			// Fail open: a Redis outage must not take down redirects.
+			if err == nil && allowed == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", retryAfter)
+				w.WriteHeader(http.StatusTooManyRequests)
+				w.Write([]byte(`{"error":"rate limit exceeded"}`)) //nolint:errcheck
 				return
 			}
 
@@ -58,19 +62,21 @@ func RateLimit(rdb *redis.Client, action string, limit int, window time.Duration
 	}
 }
 
-// clientIP extracts the real client IP, preferring X-Forwarded-For.
+// clientIP returns the client address. X-Real-IP (set by nginx from
+// $remote_addr) is trusted only when the direct peer is a private or loopback
+// address, i.e. our own proxy. X-Forwarded-For is never trusted because nginx
+// appends to whatever the client sent.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if ip, _, err := net.SplitHostPort(xff); err == nil {
-			return ip
-		}
-		return xff
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	peer, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		peer = r.RemoteAddr
 	}
-	return ip
+	if ip := net.ParseIP(peer); ip != nil && (ip.IsPrivate() || ip.IsLoopback()) {
+		if real := net.ParseIP(r.Header.Get("X-Real-IP")); real != nil {
+			return real.String()
+		}
+	}
+	return peer
 }
 
 func uniqueMember() string {

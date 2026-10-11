@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,6 +64,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"001_create_users.up.sql",
 		"002_create_links.up.sql",
 		"003_create_analytics.up.sql",
+		"004_links_expires_at_datetime.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -253,5 +255,113 @@ func TestLinkRedis_Delete(t *testing.T) {
 	}
 	if _, err := cache.Get(ctx, "todel"); err != service.ErrNotFound {
 		t.Errorf("want ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestLinkMySQL_GetByCode_ReturnsTimestamps(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (5, 'i@j.com', 'x')`) //nolint:errcheck
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	link := &service.Link{ID: 5000, UserID: 5, ShortCode: "exp0001", OriginalURL: "https://exp.com", ExpiresAt: &exp}
+	if err := repo.Create(ctx, link); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := repo.GetByCode(ctx, "exp0001")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", got.ExpiresAt, exp)
+	}
+	if got.CreatedAt.IsZero() {
+		t.Error("created_at is zero")
+	}
+}
+
+func TestLinkMySQL_ListByUser_ReturnsTimestamps(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (6, 'k@l.com', 'x')`) //nolint:errcheck
+	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	repo.Create(ctx, &service.Link{ID: 6000, UserID: 6, ShortCode: "exp0002", OriginalURL: "https://exp.com", ExpiresAt: &exp}) //nolint:errcheck
+
+	links, err := repo.ListByUser(ctx, 6, 0, 20)
+	if err != nil || len(links) != 1 {
+		t.Fatalf("list: %v (%d links)", err, len(links))
+	}
+	if links[0].ExpiresAt == nil || !links[0].ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", links[0].ExpiresAt, exp)
+	}
+	if links[0].CreatedAt.IsZero() {
+		t.Error("created_at is zero")
+	}
+}
+
+func TestUserMySQL_Create_DuplicateEmail(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewUserMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.User{ID: 1, Email: "dup@x.com", PasswordHash: "h", Plan: "free"}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	err := repo.Create(ctx, &service.User{ID: 2, Email: "dup@x.com", PasswordHash: "h", Plan: "free"})
+	if !errors.Is(err, service.ErrEmailTaken) {
+		t.Errorf("want ErrEmailTaken, got %v", err)
+	}
+}
+
+func TestTokenRedis_ConsumeRefreshToken_OnlyOnce(t *testing.T) {
+	rdb := setupRedis(t)
+	tokens := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	tokens.StoreRefreshToken(ctx, "tid", 42, time.Minute) //nolint:errcheck
+	uid, err := tokens.ConsumeRefreshToken(ctx, "tid")
+	if err != nil || uid != 42 {
+		t.Fatalf("first consume: uid=%d err=%v", uid, err)
+	}
+	if _, err := tokens.ConsumeRefreshToken(ctx, "tid"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("second consume: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTokenRedis_GetLockout(t *testing.T) {
+	rdb := setupRedis(t)
+	tokens := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	if n, err := tokens.GetLockout(ctx, "a@b.com"); err != nil || n != 0 {
+		t.Fatalf("fresh lockout: n=%d err=%v", n, err)
+	}
+	tokens.IncrLockout(ctx, "a@b.com", time.Minute) //nolint:errcheck
+	tokens.IncrLockout(ctx, "a@b.com", time.Minute) //nolint:errcheck
+	if n, err := tokens.GetLockout(ctx, "a@b.com"); err != nil || n != 2 {
+		t.Errorf("after 2 incr: n=%d err=%v", n, err)
+	}
+}
+
+func TestLinkMySQL_Create_ExpiryAfter2038(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (7, 'm@n.com', 'x')`) //nolint:errcheck
+	exp := time.Date(2040, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := repo.Create(ctx, &service.Link{ID: 7000, UserID: 7, ShortCode: "y2040", OriginalURL: "https://x.com", ExpiresAt: &exp}); err != nil {
+		t.Fatalf("create with 2040 expiry: %v", err)
+	}
+	got, err := repo.GetByCode(ctx, "y2040")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Errorf("expires_at: got %v want %v", got.ExpiresAt, exp)
 	}
 }

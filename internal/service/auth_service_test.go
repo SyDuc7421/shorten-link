@@ -62,17 +62,17 @@ func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID 
 	return nil
 }
 
-func (m *mockTokenCache) GetRefreshToken(_ context.Context, id string) (int64, error) {
+func (m *mockTokenCache) ConsumeRefreshToken(_ context.Context, id string) (int64, error) {
 	uid, ok := m.tokens[id]
 	if !ok {
 		return 0, service.ErrNotFound
 	}
+	delete(m.tokens, id)
 	return uid, nil
 }
 
-func (m *mockTokenCache) DeleteRefreshToken(_ context.Context, id string) error {
-	delete(m.tokens, id)
-	return nil
+func (m *mockTokenCache) GetLockout(_ context.Context, email string) (int64, error) {
+	return m.tokens["lockout:"+email], nil
 }
 
 func (m *mockTokenCache) IncrLockout(_ context.Context, email string, _ time.Duration) (int64, error) {
@@ -116,8 +116,8 @@ func TestRegister_OK(t *testing.T) {
 func TestRegister_DuplicateEmail(t *testing.T) {
 	repo := newMockUserRepo()
 	svc := newAuthSvc(t, repo, newMockTokenCache())
-	svc.Register(context.Background(), "a@b.com", "pass1") //nolint:errcheck
-	_, err := svc.Register(context.Background(), "a@b.com", "pass2")
+	svc.Register(context.Background(), "a@b.com", "password1") //nolint:errcheck
+	_, err := svc.Register(context.Background(), "a@b.com", "password2")
 	if !errors.Is(err, service.ErrEmailTaken) {
 		t.Errorf("want ErrEmailTaken, got %v", err)
 	}
@@ -154,12 +154,67 @@ func TestLogin_UnknownEmail(t *testing.T) {
 	}
 }
 
+func TestLogin_LockedAccount_RejectsCorrectPassword(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	ctx := context.Background()
+	svc.Register(ctx, "a@b.com", "secret123") //nolint:errcheck
+	for i := 0; i < 5; i++ {
+		svc.Login(ctx, "a@b.com", "wrongpass") //nolint:errcheck
+	}
+	_, err := svc.Login(ctx, "a@b.com", "secret123")
+	if !errors.Is(err, service.ErrAccountLocked) {
+		t.Errorf("want ErrAccountLocked for correct password while locked, got %v", err)
+	}
+}
+
+func TestLogin_UnknownEmail_LocksLikeKnownEmail(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	ctx := context.Background()
+	var err error
+	for i := 0; i < 5; i++ {
+		_, err = svc.Login(ctx, "nobody@x.com", "wrongpass")
+	}
+	if !errors.Is(err, service.ErrAccountLocked) {
+		t.Errorf("want ErrAccountLocked after 5 failures on unknown email, got %v", err)
+	}
+}
+
+func TestLogin_EmailIsCaseInsensitive(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	ctx := context.Background()
+	svc.Register(ctx, "User@B.com", "secret123") //nolint:errcheck
+	if _, err := svc.Login(ctx, " user@b.COM ", "secret123"); err != nil {
+		t.Errorf("want login ok with different email case, got %v", err)
+	}
+}
+
+func TestLogin_LockoutSharedAcrossEmailCase(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	ctx := context.Background()
+	svc.Register(ctx, "a@b.com", "secret123") //nolint:errcheck
+	for _, e := range []string{"a@b.com", "A@b.com", "a@B.com", "A@B.com", "a@b.COM"} {
+		svc.Login(ctx, e, "wrongpass") //nolint:errcheck
+	}
+	_, err := svc.Login(ctx, "a@b.com", "secret123")
+	if !errors.Is(err, service.ErrAccountLocked) {
+		t.Errorf("want ErrAccountLocked, got %v", err)
+	}
+}
+
+func TestRegister_ShortPassword(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	_, err := svc.Register(context.Background(), "a@b.com", "short")
+	if !errors.Is(err, service.ErrWeakPassword) {
+		t.Errorf("want ErrWeakPassword, got %v", err)
+	}
+}
+
 // --- Refresh tests ---
 
 func TestRefresh_OK(t *testing.T) {
 	cache := newMockTokenCache()
 	svc := newAuthSvc(t, newMockUserRepo(), cache)
-	pair, _ := svc.Register(context.Background(), "a@b.com", "pass")
+	pair, _ := svc.Register(context.Background(), "a@b.com", "password")
 
 	newPair, err := svc.Refresh(context.Background(), pair.RefreshToken)
 	if err != nil {
@@ -188,7 +243,7 @@ func TestRefresh_InvalidToken(t *testing.T) {
 func TestParseAccessToken_OK(t *testing.T) {
 	repo := newMockUserRepo()
 	svc := newAuthSvc(t, repo, newMockTokenCache())
-	pair, _ := svc.Register(context.Background(), "a@b.com", "pass")
+	pair, _ := svc.Register(context.Background(), "a@b.com", "password")
 
 	userID, err := svc.ParseAccessToken(pair.AccessToken)
 	if err != nil {
@@ -204,5 +259,17 @@ func TestParseAccessToken_Invalid(t *testing.T) {
 	_, err := svc.ParseAccessToken("garbage")
 	if !errors.Is(err, service.ErrInvalidToken) {
 		t.Errorf("want ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestRegister_PasswordTooLongForBcrypt(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+	long := make([]byte, 73)
+	for i := range long {
+		long[i] = 'a'
+	}
+	_, err := svc.Register(context.Background(), "a@b.com", string(long))
+	if !errors.Is(err, service.ErrWeakPassword) {
+		t.Errorf("want ErrWeakPassword, got %v", err)
 	}
 }

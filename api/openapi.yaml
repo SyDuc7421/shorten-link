@@ -197,6 +197,93 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/auth/forgot-password:
+    post:
+      summary: Request a password reset link
+      description: |
+        If the email belongs to an account, a single-use link to
+        `PASSWORD_RESET_URL?token=...` is emailed. It expires after 30 minutes,
+        and requesting a new one invalidates the previous link. At most one
+        mail per address per minute. The response is the same whether or not
+        the email exists. Limited to 5 requests per hour per IP.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "user@example.com"
+      responses:
+        "202":
+          description: Request accepted (for every email, registered or not)
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/reset-password:
+    post:
+      summary: Set a new password with a reset token
+      description: |
+        Uses the token from the emailed link. On success every existing
+        session of the user is ended (refresh tokens revoked) and the user
+        signs in again. A weak password does not use up the token. Limited to
+        10 requests per minute per IP.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                  description: The `token` query parameter of the reset link.
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 72
+                  description: 8–72 bytes.
+      responses:
+        "204":
+          description: Password changed
+        "400":
+          description: Missing field, or password not 8–72 bytes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "password must be 8-72 characters"
+        "401":
+          description: Token unknown, expired or already used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "invalid or expired reset token"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /api/links:
     post:
       summary: Shorten a URL

@@ -29,6 +29,16 @@ type Config struct {
 	// JWT
 	JWTPrivateKeyPath string `envconfig:"JWT_PRIVATE_KEY_PATH" required:"true"`
 	JWTPublicKeyPath  string `envconfig:"JWT_PUBLIC_KEY_PATH" required:"true"`
+
+	// Password reset. The link is PasswordResetURL + "?token=...".
+	PasswordResetURL string `envconfig:"PASSWORD_RESET_URL" default:"http://localhost:3000/reset-password"`
+
+	// SMTP. Empty SMTPHost = reset links are logged instead of mailed.
+	SMTPHost     string `envconfig:"SMTP_HOST"`
+	SMTPPort     int    `envconfig:"SMTP_PORT" default:"587"`
+	SMTPUsername string `envconfig:"SMTP_USERNAME"`
+	SMTPPassword string `envconfig:"SMTP_PASSWORD"`
+	SMTPFrom     string `envconfig:"SMTP_FROM" default:"no-reply@localhost"`
 }
 
 func Load() (*Config, error) {

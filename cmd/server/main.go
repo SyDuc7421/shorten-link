@@ -79,7 +79,7 @@ func main() {
 
 	// services
 	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
-	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mail.NewLogMailer(log), "http://localhost:3000/reset-password")
+	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, newMailer(cfg, log), cfg.PasswordResetURL)
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
@@ -150,6 +150,9 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 	loginRL := middleware.RateLimit(rdb, "login", 10, time.Minute)(mux)
 	registerRL := middleware.RateLimit(rdb, "register", 5, time.Hour)(mux)
 	refreshRL := middleware.RateLimit(rdb, "refresh", 30, time.Minute)(mux)
+	// each accepted request can send a mail
+	forgotRL := middleware.RateLimit(rdb, "forgot-password", 5, time.Hour)(mux)
+	resetRL := middleware.RateLimit(rdb, "reset-password", 10, time.Minute)(mux)
 	// called while the user types an alias; also stops bulk probing of codes
 	aliasCheckRL := middleware.RateLimit(rdb, "alias-check", 60, time.Minute)(mux)
 
@@ -165,12 +168,32 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 			registerRL.ServeHTTP(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/refresh":
 			refreshRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/forgot-password":
+			forgotRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/reset-password":
+			resetRL.ServeHTTP(w, r)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/links/availability":
 			aliasCheckRL.ServeHTTP(w, r)
 		default:
 			mux.ServeHTTP(w, r)
 		}
 	})
+}
+
+// newMailer sends through SMTP when SMTP_HOST is set, and otherwise only logs
+// the reset link so local development needs no mail setup.
+func newMailer(cfg *config.Config, log *zap.Logger) service.Mailer {
+	if cfg.SMTPHost == "" {
+		log.Warn("SMTP_HOST not set: password reset links are logged, not mailed")
+		return mail.NewLogMailer(log)
+	}
+	return mail.NewSMTPMailer(mail.SMTPConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+	}, log)
 }
 
 func newServer(port int, h http.Handler) *http.Server {

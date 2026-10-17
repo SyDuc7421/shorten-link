@@ -153,9 +153,12 @@ func (c *tokenRedis) DeletePasswordReset(ctx context.Context, userID int64) erro
 }
 
 func (c *tokenRedis) AcquireResetCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error) {
-	ok, err := c.rdb.SetNX(ctx, resetCooldownPrefix+email, 1, ttl).Result()
+	err := c.rdb.SetArgs(ctx, resetCooldownPrefix+email, 1, redis.SetArgs{Mode: "NX", TTL: ttl}).Err()
+	if errors.Is(err, redis.Nil) { // key exists: still cooling down
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("token cache: reset cooldown: %w", err)
 	}
-	return ok, nil
+	return true, nil
 }

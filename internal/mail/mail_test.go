@@ -82,7 +82,7 @@ func fakeSMTP(t *testing.T) (host string, port int, got <-chan string) {
 		}
 		defer conn.Close()
 		r := bufio.NewReader(conn)
-		say := func(s string) { fmt.Fprintf(conn, "%s\r\n", s) }
+		say := func(s string) { fmt.Fprintf(conn, "%s\r\n", s) } //nolint:errcheck // test server
 		say("220 fake ESMTP")
 		var data strings.Builder
 		for {

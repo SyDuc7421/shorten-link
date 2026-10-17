@@ -21,7 +21,7 @@ exits and Docker restarts it.
 | 5 | `messaging.NewPublisher` tries to connect to RabbitMQ | **not fatal**: it keeps retrying in the background |
 | 6 | `cfg.LoadRSAKeys` reads the JWT key pair | fatal |
 | 7 | `idgen.NewGenerator(cfg.NodeID)` | fatal if `NODE_ID` is outside 0–1023 |
-| 8 | Repositories → services → handlers are constructed | — |
+| 8 | Repositories → services → handlers are constructed. The mailer is SMTP when `SMTP_HOST` is set, otherwise log-only (a warning says so) | — |
 | 9 | Routes are registered on one `http.ServeMux` | — |
 | 10 | The mux is wrapped in rate limits, then in the middleware chain | — |
 | 11 | `ListenAndServe` starts in a goroutine | fatal |
@@ -67,6 +67,8 @@ path. Each limiter is a sliding window per client IP, stored in Redis.
 | `POST /api/auth/login` | 10 / minute | Each attempt runs bcrypt (~0.25 s of CPU) |
 | `POST /api/auth/register` | 5 / hour | Same, and new accounts are cheap to abuse |
 | `POST /api/auth/refresh` | 30 / minute | — |
+| `POST /api/auth/forgot-password` | 5 / hour | Each accepted request can send a mail |
+| `POST /api/auth/reset-password` | 10 / minute | Each attempt runs bcrypt |
 
 Everything else (listing, deleting, `/healthz`, `/docs`) is not rate limited in
 the app. nginx adds a coarse 100 requests/second limit in front of everything.

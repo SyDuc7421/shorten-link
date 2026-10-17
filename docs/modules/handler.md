@@ -27,6 +27,8 @@ repositories.
 | `POST /api/auth/register` | — | `AuthHandler.RegisterUser` | `auth.go` |
 | `POST /api/auth/login` | — | `AuthHandler.Login` | `auth.go` |
 | `POST /api/auth/refresh` | — | `AuthHandler.Refresh` | `auth.go` |
+| `POST /api/auth/forgot-password` | — | `AuthHandler.ForgotPassword` | `auth.go` |
+| `POST /api/auth/reset-password` | — | `AuthHandler.ResetPassword` | `auth.go` |
 | `GET /healthz` | — | `HealthChecker.Health` | `health.go` |
 | `GET /docs`, `GET /api/openapi.yaml` | — | `RegisterDocs` | `docs.go` |
 
@@ -76,7 +78,7 @@ it is ever registered without the wrapper.
 
 ## Auth (`auth.go`)
 
-All three endpoints return the same body on success:
+Register, login and refresh return the same body on success:
 `{"access_token": "...", "refresh_token": "..."}`.
 
 | Endpoint | Success | Errors |
@@ -84,9 +86,16 @@ All three endpoints return the same body on success:
 | register | 201 | 400 missing field or password not 8–72 bytes, 409 email taken |
 | login | 200 | 400 missing field, 401 wrong email or password, 429 account locked |
 | refresh | 200 | 400 missing token, 401 invalid, expired or already-used token |
+| forgot-password | 202, empty body | 400 missing email, 500 storage failure |
+| reset-password | 204 | 400 missing field or password not 8–72 bytes, 401 invalid, expired or used token |
+
+**forgot-password answers `202` for every well-formed request**, registered
+email or not, so it cannot be used to find out who has an account. It also
+returns no body, so there is nothing to compare.
 
 Login answers `401 invalid email or password` for both an unknown email and a
-wrong password. That is deliberate (see [service.md](service.md#auth-auth_servicego)).
+wrong password. That is deliberate (see [service.md](service.md#auth-auth_servicego)). How
+the reset itself works is in [service.md](service.md#password-reset).
 
 ## Health (`health.go`)
 

@@ -164,6 +164,8 @@ Every request passes through these, outermost first:
 | POST | `/api/auth/register` | — | Create account, returns tokens |
 | POST | `/api/auth/login` | — | Log in, returns tokens |
 | POST | `/api/auth/refresh` | — | Swap a refresh token for a new pair |
+| POST | `/api/auth/forgot-password` | — | Email a password reset link (always 202) |
+| POST | `/api/auth/reset-password` | — | Set a new password with the link's token; ends all sessions |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 

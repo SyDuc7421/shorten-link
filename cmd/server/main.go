@@ -78,6 +78,7 @@ func main() {
 	linkCache := repository.NewLinkRedis(rdb)
 	userRepo := repository.NewUserMySQL(db)
 	tokenCache := repository.NewTokenRedis(rdb)
+	adminRepo := repository.NewAdminMySQL(db)
 
 	// services
 	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
@@ -90,11 +91,13 @@ func main() {
 		log.Fatal("invalid config", zap.Error(err))
 	}
 	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mailer, resetURL)
+	adminSvc := service.NewAdminService(adminRepo, userRepo, linkCache, tokenCache)
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
 	authHandler := handler.NewAuthHandler(authSvc)
 	healthHandler := handler.NewHealthChecker(db, rdb, pub)
+	adminHandler := handler.NewAdminHandler(adminSvc, cfg.BaseURL)
 
 	// CORS origins from config
 	var allowedOrigins []string
@@ -110,6 +113,7 @@ func main() {
 	healthHandler.Register(mux)
 	authHandler.Register(mux)
 	linkHandler.Register(mux, middleware.RequireAuth)
+	adminHandler.Register(mux, middleware.RequireAuth, middleware.RequireAdmin(adminSvc))
 	handler.RegisterDocs(mux)
 
 	root := withRateLimits(mux, rdb)

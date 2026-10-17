@@ -86,7 +86,7 @@ Register, login and refresh return the same body on success:
 | register | 201 | 400 missing field or password not 8–72 bytes, 409 email taken |
 | login | 200 | 400 missing field, 401 wrong email or password, 429 account locked |
 | refresh | 200 | 400 missing token, 401 invalid, expired or already-used token |
-| forgot-password | 202, empty body | 400 missing email, 500 storage failure |
+| forgot-password | 202, empty body | 400 missing email or bad JSON. Never 500: the work runs in the background |
 | reset-password | 204 | 400 missing field or password not 8–72 bytes, 401 invalid, expired or used token |
 
 **forgot-password answers `202` for every well-formed request**, registered

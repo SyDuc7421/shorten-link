@@ -253,6 +253,7 @@ to 3 attempts.
 | `prt:<sha256>` | user ID (password reset token) | 30 min |
 | `prt-user:<userID>` | hash of the current reset token | 30 min |
 | `prt-cooldown:<email>` | reset mail sent recently | 60 s |
+| `prt-daily:<email>` | reset mails sent today | 24 h |
 | `rl:<action>:<ip>` | sorted set of request timestamps | window + 1s |
 
 ### RabbitMQ

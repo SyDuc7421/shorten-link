@@ -137,6 +137,7 @@ const (
 	resetPrefix         = "prt:"
 	resetUserPrefix     = "prt-user:"
 	resetCooldownPrefix = "prt-cooldown:"
+	resetDailyPrefix    = "prt-daily:"
 )
 
 func (c *tokenRedis) StorePasswordReset(ctx context.Context, tokenHash string, userID int64, ttl time.Duration) error {
@@ -181,13 +182,42 @@ func (c *tokenRedis) DeletePasswordReset(ctx context.Context, userID int64) erro
 	return nil
 }
 
-func (c *tokenRedis) AcquireResetCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error) {
-	err := c.rdb.SetArgs(ctx, resetCooldownPrefix+email, 1, redis.SetArgs{Mode: "NX", TTL: ttl}).Err()
-	if errors.Is(err, redis.Nil) { // key exists: still cooling down
-		return false, nil
-	}
+// acquireResetSlotScript allows a reset mail unless one went out within the
+// cooldown or the daily cap for the address is reached.
+var acquireResetSlotScript = redis.NewScript(`
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  return 0
+end
+local n = redis.call('INCR', KEYS[2])
+if n == 1 then
+  redis.call('PEXPIRE', KEYS[2], ARGV[2])
+end
+if n > tonumber(ARGV[3]) then
+  return 0
+end
+redis.call('SET', KEYS[1], 1, 'PX', ARGV[1])
+return 1
+`)
+
+func (c *tokenRedis) AcquireResetSlot(ctx context.Context, email string, cooldown, window time.Duration, max int) (bool, error) {
+	ok, err := acquireResetSlotScript.Run(ctx, c.rdb,
+		[]string{resetCooldownPrefix + email, resetDailyPrefix + email},
+		cooldown.Milliseconds(), window.Milliseconds(), max,
+	).Int()
 	if err != nil {
-		return false, fmt.Errorf("token cache: reset cooldown: %w", err)
+		return false, fmt.Errorf("token cache: reset slot: %w", err)
 	}
-	return true, nil
+	return ok == 1, nil
+}
+
+func (c *tokenRedis) ReleaseResetSlot(ctx context.Context, email string) error {
+	_, err := c.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.Del(ctx, resetCooldownPrefix+email)
+		p.Decr(ctx, resetDailyPrefix+email)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("token cache: release reset slot: %w", err)
+	}
+	return nil
 }

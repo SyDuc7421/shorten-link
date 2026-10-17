@@ -68,6 +68,7 @@ cannot tell "no such user" apart from "same hash".
 | `prt:<sha256>` | user ID | 30 min | Password reset tokens (only the hash is stored) |
 | `prt-user:<userID>` | hash of the user's current reset token | 30 min | Invalidating the previous link when a new one is requested |
 | `prt-cooldown:<email>` | `1` | 60 s | At most one reset mail per minute per address |
+| `prt-daily:<email>` | reset mails sent | 24 h from the first | At most 5 reset mails a day per address |
 
 - **`ConsumeRefreshToken`** uses `GETDEL`, which reads and deletes in one atomic
   step. Two concurrent refreshes with the same token cannot both succeed.
@@ -92,8 +93,10 @@ cannot tell "no such user" apart from "same hash".
   `prt-user:` and deletes it while storing the new one, so only the latest link
   works. `ConsumePasswordReset` uses `GETDEL`, so a link works once even if two
   requests race.
-- **`AcquireResetCooldown`** is `SET ... NX EX`: it succeeds only if no reset
-  mail went to that address within the last minute.
+- **`AcquireResetSlot`** is a Lua script: it refuses if the cooldown key
+  exists, otherwise increments the daily counter and refuses past the cap,
+  otherwise sets the cooldown. `ReleaseResetSlot` deletes the cooldown and
+  decrements the counter when the mail was never sent.
 - **`IncrLockout`** sets the expiry only on the first increment, so the
   15-minute window starts at the first failure and is not extended by later
   ones.

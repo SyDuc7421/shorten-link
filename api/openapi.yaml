@@ -204,8 +204,9 @@ paths:
         If the email belongs to an account, a single-use link to
         `PASSWORD_RESET_URL?token=...` is emailed. It expires after 30 minutes,
         and requesting a new one invalidates the previous link. At most one
-        mail per address per minute. The response is the same whether or not
-        the email exists. Limited to 5 requests per hour per IP.
+        mail per address per minute and five per day. The response is the
+        same whether or not the email exists, and the work happens after it
+        is sent. Limited to 5 requests per hour per IP.
       security: []
       tags: [Auth]
       requestBody:
@@ -229,8 +230,6 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/InternalError"
 
   /api/auth/reset-password:
     post:

@@ -16,8 +16,10 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/pkg/idgen"
 )
 
@@ -30,10 +32,12 @@ const (
 	minPasswordLen  = 8
 	maxPasswordLen  = 72 // bcrypt input limit
 
-	resetTokenTTL   = 30 * time.Minute
-	resetCooldown   = time.Minute
-	mailSendTimeout = 10 * time.Second
-	revokeAttempts  = 3
+	resetTokenTTL       = 30 * time.Minute
+	resetCooldown       = time.Minute // at most one reset mail per address per minute
+	resetMailWindow     = 24 * time.Hour
+	resetMailsPerWindow = 5 // and at most 5 a day, whatever the number of IPs
+	resetWorkTimeout    = 10 * time.Second
+	revokeAttempts      = 3
 )
 
 // dummyHash is compared against when the email is unknown so that login
@@ -178,12 +182,21 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 }
 
 // RequestPasswordReset mails a single-use reset link if email belongs to a
-// user. It returns nil for unknown emails too, so callers cannot tell them
-// apart; only storage failures are errors. At most one mail per address is
-// sent per resetCooldown.
-func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+// user. All the work happens in the background, so the call takes the same
+// time and has the same outcome for every address, registered or not, and a
+// storage failure cannot show up as a different response. Failures are
+// logged with the request's logger.
+func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) {
 	email = normalizeEmail(email)
+	log := logger.FromContext(ctx)
+	s.runAsync(func(ctx context.Context) {
+		if err := s.sendResetLink(ctx, email); err != nil {
+			log.Error("password reset request", zap.Error(err))
+		}
+	})
+}
 
+func (s *AuthService) sendResetLink(ctx context.Context, email string) error {
 	user, err := s.users.GetByEmail(ctx, email)
 	if errors.Is(err, ErrNotFound) {
 		return nil
@@ -192,19 +205,21 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 		return fmt.Errorf("service: reset lookup: %w", err)
 	}
 
-	ok, err := s.tokens.AcquireResetCooldown(ctx, email, resetCooldown)
+	ok, err := s.tokens.AcquireResetSlot(ctx, email, resetCooldown, resetMailWindow, resetMailsPerWindow)
 	if err != nil {
-		return fmt.Errorf("service: reset cooldown: %w", err)
+		return fmt.Errorf("service: reset slot: %w", err)
 	}
 	if !ok {
-		return nil
+		return nil // a mail went out recently, or the daily cap is reached
 	}
 
 	token, err := newResetToken()
-	if err != nil {
-		return fmt.Errorf("service: reset token: %w", err)
+	if err == nil {
+		err = s.tokens.StorePasswordReset(ctx, hashResetToken(token), user.ID, resetTokenTTL)
 	}
-	if err := s.tokens.StorePasswordReset(ctx, hashResetToken(token), user.ID, resetTokenTTL); err != nil {
+	if err != nil {
+		// No mail was sent, so do not make the user wait out the cooldown.
+		s.tokens.ReleaseResetSlot(ctx, email) //nolint:errcheck
 		return fmt.Errorf("service: store reset token: %w", err)
 	}
 
@@ -212,8 +227,7 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) er
 	if err != nil {
 		return err
 	}
-	s.sendAsync(func(ctx context.Context) { s.mailer.SendPasswordReset(ctx, email, link) }) //nolint:errcheck
-	return nil
+	return s.mailer.SendPasswordReset(ctx, email, link)
 }
 
 // ResetPassword sets a new password using a token from RequestPasswordReset
@@ -294,14 +308,13 @@ func (s *AuthService) resetLink(token string) (string, error) {
 	return u.String(), nil
 }
 
-// sendAsync runs send in the background so that a request for a registered
-// email takes as long as one for an unknown email. The timeout bounds how
-// long the goroutine can live if the mail server stalls.
-func (s *AuthService) sendAsync(send func(ctx context.Context)) {
+// runAsync runs work in the background with its own timeout, which bounds how
+// long the goroutine can live if Redis, MySQL or the mail server stalls.
+func (s *AuthService) runAsync(work func(ctx context.Context)) {
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), mailSendTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), resetWorkTimeout)
 		defer cancel()
-		send(ctx)
+		work(ctx)
 	}()
 }
 

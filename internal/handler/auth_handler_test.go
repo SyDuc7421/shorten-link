@@ -20,12 +20,12 @@ type mockAuthSvc struct {
 	registerFn func(ctx context.Context, email, password string) (*service.TokenPair, error)
 	loginFn    func(ctx context.Context, email, password string) (*service.TokenPair, error)
 	refreshFn  func(ctx context.Context, token string) (*service.TokenPair, error)
-	forgotFn   func(ctx context.Context, email string) error
+	forgotFn   func(ctx context.Context, email string)
 	resetFn    func(ctx context.Context, token, password string) error
 }
 
-func (m *mockAuthSvc) RequestPasswordReset(ctx context.Context, email string) error {
-	return m.forgotFn(ctx, email)
+func (m *mockAuthSvc) RequestPasswordReset(ctx context.Context, email string) {
+	m.forgotFn(ctx, email)
 }
 func (m *mockAuthSvc) ResetPassword(ctx context.Context, token, password string) error {
 	return m.resetFn(ctx, token, password)
@@ -251,10 +251,7 @@ func postJSON(mux http.Handler, path, body string) *httptest.ResponseRecorder {
 
 func TestAuthHandler_ForgotPassword_Accepted(t *testing.T) {
 	var got string
-	mux := newAuthMux(&mockAuthSvc{forgotFn: func(_ context.Context, email string) error {
-		got = email
-		return nil
-	}})
+	mux := newAuthMux(&mockAuthSvc{forgotFn: func(_ context.Context, email string) { got = email }})
 	w := postJSON(mux, "/api/auth/forgot-password", `{"email":"a@x.com"}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("want 202, got %d: %s", w.Code, w.Body)
@@ -268,18 +265,13 @@ func TestAuthHandler_ForgotPassword_Accepted(t *testing.T) {
 }
 
 func TestAuthHandler_ForgotPassword_Errors(t *testing.T) {
-	for _, tc := range []struct {
-		name, body string
-		svcErr     error
-		want       int
-	}{
-		{"missing email", `{}`, nil, http.StatusBadRequest},
-		{"bad json", `{`, nil, http.StatusBadRequest},
-		{"service failure", `{"email":"a@x.com"}`, errors.New("redis down"), http.StatusInternalServerError},
+	for _, tc := range []struct{ name, body string }{
+		{"missing email", `{}`},
+		{"bad json", `{`},
 	} {
-		mux := newAuthMux(&mockAuthSvc{forgotFn: func(context.Context, string) error { return tc.svcErr }})
-		if w := postJSON(mux, "/api/auth/forgot-password", tc.body); w.Code != tc.want {
-			t.Errorf("%s: want %d, got %d", tc.name, tc.want, w.Code)
+		mux := newAuthMux(&mockAuthSvc{forgotFn: func(context.Context, string) { t.Error("service called for a bad request") }})
+		if w := postJSON(mux, "/api/auth/forgot-password", tc.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", tc.name, w.Code)
 		}
 	}
 }

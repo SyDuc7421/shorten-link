@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 type mockUserRepo struct {
 	users     map[string]*service.User
 	createErr error
+	// getByEmailGate, when set, blocks GetByEmail until it is closed.
+	getByEmailGate chan struct{}
 }
 
 func newMockUserRepo() *mockUserRepo {
@@ -36,6 +39,9 @@ func (m *mockUserRepo) Create(_ context.Context, u *service.User) error {
 }
 
 func (m *mockUserRepo) GetByEmail(_ context.Context, email string) (*service.User, error) {
+	if m.getByEmailGate != nil {
+		<-m.getByEmailGate
+	}
 	if u, ok := m.users[email]; ok {
 		return u, nil
 	}
@@ -64,13 +70,17 @@ func (m *mockUserRepo) UpdatePasswordHash(_ context.Context, id int64, hash stri
 // --- mock token cache ---
 
 type mockTokenCache struct {
-	tokens     map[string]int64
-	resets     map[string]int64 // token hash -> user ID
-	cooldowns  map[string]bool
-	revokedFor []int64
-	revokedAt  map[int64]time.Time
-	revokeErrs []error // returned by successive RevokeAllRefreshTokens calls
-	onConsume  func()  // runs inside ConsumeRefreshToken, to simulate a concurrent request
+	mu sync.Mutex // the reset flow calls it from a background goroutine
+
+	tokens         map[string]int64
+	resets         map[string]int64 // token hash -> user ID
+	cooldowns      map[string]bool
+	revokedFor     []int64
+	revokedAt      map[int64]time.Time
+	storeResetErrs []error // returned by successive StorePasswordReset calls
+	released       []string
+	revokeErrs     []error // returned by successive RevokeAllRefreshTokens calls
+	onConsume      func()  // runs inside ConsumeRefreshToken, to simulate a concurrent request
 
 	resetPointerDeletedFor []int64
 }
@@ -87,6 +97,8 @@ func newMockTokenCache() *mockTokenCache {
 // RevokeAllRefreshTokens mirrors the Redis version: it records a revoke time
 // that blocks tokens authorised before it, and deletes the user's tokens.
 func (m *mockTokenCache) RevokeAllRefreshTokens(_ context.Context, userID int64, at time.Time, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if len(m.revokeErrs) > 0 {
 		err := m.revokeErrs[0]
 		m.revokeErrs = m.revokeErrs[1:]
@@ -105,6 +117,15 @@ func (m *mockTokenCache) RevokeAllRefreshTokens(_ context.Context, userID int64,
 }
 
 func (m *mockTokenCache) StorePasswordReset(_ context.Context, hash string, userID int64, _ time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.storeResetErrs) > 0 {
+		err := m.storeResetErrs[0]
+		m.storeResetErrs = m.storeResetErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	for h, id := range m.resets {
 		if id == userID {
 			delete(m.resets, h)
@@ -115,6 +136,8 @@ func (m *mockTokenCache) StorePasswordReset(_ context.Context, hash string, user
 }
 
 func (m *mockTokenCache) ConsumePasswordReset(_ context.Context, hash string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	id, ok := m.resets[hash]
 	if !ok {
 		return 0, service.ErrNotFound
@@ -125,11 +148,15 @@ func (m *mockTokenCache) ConsumePasswordReset(_ context.Context, hash string) (i
 
 // DeletePasswordReset drops only the user -> token pointer, like the Redis version.
 func (m *mockTokenCache) DeletePasswordReset(_ context.Context, userID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.resetPointerDeletedFor = append(m.resetPointerDeletedFor, userID)
 	return nil
 }
 
-func (m *mockTokenCache) AcquireResetCooldown(_ context.Context, email string, _ time.Duration) (bool, error) {
+func (m *mockTokenCache) AcquireResetSlot(_ context.Context, email string, _, _ time.Duration, _ int) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.cooldowns[email] {
 		return false, nil
 	}
@@ -137,7 +164,17 @@ func (m *mockTokenCache) AcquireResetCooldown(_ context.Context, email string, _
 	return true, nil
 }
 
+func (m *mockTokenCache) ReleaseResetSlot(_ context.Context, email string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cooldowns, email)
+	m.released = append(m.released, email)
+	return nil
+}
+
 func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID int64, _ time.Duration, authorizedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if at, ok := m.revokedAt[userID]; ok && !authorizedAt.After(at) {
 		return service.ErrInvalidToken
 	}
@@ -146,27 +183,36 @@ func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID 
 }
 
 func (m *mockTokenCache) ConsumeRefreshToken(_ context.Context, id string) (int64, error) {
+	m.mu.Lock()
 	uid, ok := m.tokens[id]
-	if ok && m.onConsume != nil {
-		defer m.onConsume()
-	}
+	delete(m.tokens, id)
+	hook := m.onConsume
+	m.mu.Unlock()
 	if !ok {
 		return 0, service.ErrNotFound
 	}
-	delete(m.tokens, id)
+	if hook != nil {
+		hook() // outside the lock: it calls back into the cache
+	}
 	return uid, nil
 }
 
 func (m *mockTokenCache) GetLockout(_ context.Context, email string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.tokens["lockout:"+email], nil
 }
 
 func (m *mockTokenCache) IncrLockout(_ context.Context, email string, _ time.Duration) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.tokens["lockout:"+email]++
 	return m.tokens["lockout:"+email], nil
 }
 
 func (m *mockTokenCache) DeleteLockout(_ context.Context, email string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.tokens, "lockout:"+email)
 	return nil
 }
@@ -436,9 +482,7 @@ func TestRequestPasswordReset_UnknownEmail(t *testing.T) {
 	tokens := newMockTokenCache()
 	svc, mailer := newAuthSvcWithMailer(t, newMockUserRepo(), tokens)
 
-	if err := svc.RequestPasswordReset(context.Background(), "nobody@x.com"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	svc.RequestPasswordReset(context.Background(), "nobody@x.com")
 	mailer.none(t)
 	if len(tokens.resets) != 0 {
 		t.Errorf("stored %d reset tokens for an unknown email", len(tokens.resets))
@@ -453,9 +497,7 @@ func TestRequestPasswordReset_SendsLinkWithHashedToken(t *testing.T) {
 	}
 
 	// Same normalisation as login: case and surrounding spaces do not matter.
-	if err := svc.RequestPasswordReset(context.Background(), "  A@X.com "); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	svc.RequestPasswordReset(context.Background(), "  A@X.com ")
 	mail := mailer.next(t)
 	if mail.to != "a@x.com" {
 		t.Errorf("mail to %q, want a@x.com", mail.to)
@@ -478,11 +520,9 @@ func TestRequestPasswordReset_Cooldown(t *testing.T) {
 	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
 	svc.Register(context.Background(), "a@x.com", "secret123") //nolint:errcheck
 
-	svc.RequestPasswordReset(context.Background(), "a@x.com") //nolint:errcheck
+	svc.RequestPasswordReset(context.Background(), "a@x.com")
 	first := tokenFromLink(t, mailer.next(t).link)
-	if err := svc.RequestPasswordReset(context.Background(), "a@x.com"); err != nil {
-		t.Fatalf("second request: %v", err)
-	}
+	svc.RequestPasswordReset(context.Background(), "a@x.com")
 	mailer.none(t)
 	if _, ok := tokens.resets[sha256Hex(first)]; !ok || len(tokens.resets) != 1 {
 		t.Errorf("a request during the cooldown must leave the first token alone, resets = %v", tokens.resets)
@@ -495,9 +535,7 @@ func requestResetToken(t *testing.T, svc *service.AuthService, mailer *mockMaile
 	if _, err := svc.Register(context.Background(), email, "old-password"); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RequestPasswordReset(context.Background(), email); err != nil {
-		t.Fatal(err)
-	}
+	svc.RequestPasswordReset(context.Background(), email)
 	return tokenFromLink(t, mailer.next(t).link)
 }
 
@@ -628,5 +666,44 @@ func TestLogin_RacingPasswordReset(t *testing.T) {
 
 	if _, err := svc.Login(context.Background(), "a@x.com", "old-password"); !errors.Is(err, service.ErrInvalidCredentials) {
 		t.Errorf("want ErrInvalidCredentials, got %v", err)
+	}
+}
+
+// The request must not wait for the user lookup or storage: otherwise
+// registered emails take measurably longer than unknown ones, and a storage
+// error would surface as a different status code.
+func TestRequestPasswordReset_ReturnsBeforeLookup(t *testing.T) {
+	users := newMockUserRepo()
+	users.getByEmailGate = make(chan struct{})
+	defer close(users.getByEmailGate)
+	svc, _ := newAuthSvcWithMailer(t, users, newMockTokenCache())
+
+	done := make(chan struct{})
+	go func() {
+		svc.RequestPasswordReset(context.Background(), "a@x.com")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RequestPasswordReset waited for the user lookup")
+	}
+}
+
+func TestRequestPasswordReset_StoreFailureReleasesSlot(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	svc.Register(context.Background(), "a@x.com", "secret123") //nolint:errcheck
+	tokens.storeResetErrs = []error{errors.New("redis timeout")}
+
+	svc.RequestPasswordReset(context.Background(), "a@x.com")
+	mailer.none(t)
+	// The retry right after the failure must not be swallowed by the cooldown.
+	svc.RequestPasswordReset(context.Background(), "a@x.com")
+	if mail := mailer.next(t); mail.to != "a@x.com" {
+		t.Errorf("retry mailed %q", mail.to)
+	}
+	if len(tokens.released) != 1 {
+		t.Errorf("slot released %d times, want 1", len(tokens.released))
 	}
 }

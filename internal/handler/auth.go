@@ -14,7 +14,7 @@ type AuthServicer interface {
 	Register(ctx context.Context, email, password string) (*service.TokenPair, error)
 	Login(ctx context.Context, email, password string) (*service.TokenPair, error)
 	Refresh(ctx context.Context, refreshToken string) (*service.TokenPair, error)
-	RequestPasswordReset(ctx context.Context, email string) error
+	RequestPasswordReset(ctx context.Context, email string)
 	ResetPassword(ctx context.Context, token, password string) error
 }
 
@@ -144,10 +144,7 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RequestPasswordReset(r.Context(), body.Email); err != nil {
-		writeError(w, http.StatusInternalServerError, "password reset request failed")
-		return
-	}
+	h.svc.RequestPasswordReset(r.Context(), body.Email)
 	w.WriteHeader(http.StatusAccepted)
 }
 

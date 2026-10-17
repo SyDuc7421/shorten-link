@@ -63,8 +63,11 @@ type TokenCache interface {
 	// ConsumePasswordReset atomically reads and deletes a reset token.
 	ConsumePasswordReset(ctx context.Context, tokenHash string) (int64, error)
 	DeletePasswordReset(ctx context.Context, userID int64) error
-	// AcquireResetCooldown reports true if no reset mail was sent to email within ttl.
-	AcquireResetCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error)
+	// AcquireResetSlot reports true if a reset mail may be sent to email now:
+	// none in the last cooldown, and fewer than max in the last window.
+	AcquireResetSlot(ctx context.Context, email string, cooldown, window time.Duration, max int) (bool, error)
+	// ReleaseResetSlot gives back a slot whose mail was never sent.
+	ReleaseResetSlot(ctx context.Context, email string) error
 }
 
 // Mailer sends account emails, defined at the consumer site. Implemented by internal/mail.

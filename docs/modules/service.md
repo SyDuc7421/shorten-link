@@ -159,18 +159,26 @@ attack.
 
 Two steps, matching the two endpoints.
 
-**`RequestPasswordReset(ctx, email)`** always returns `nil` unless storage
-fails, whether or not the email exists, so the API answers the same either way.
+**`RequestPasswordReset(ctx, email)`** returns nothing. It normalises the email
+and hands **all** the work to a background goroutine (`runAsync`, 10 s
+timeout), so the call takes the same time and has the same outcome for every
+address. Doing the lookup or the Redis calls inside the request would make
+registered emails measurably slower, and a storage error would turn into a
+different status code. Background failures are logged with the request's
+logger (`logger.FromContext`), so they carry the request ID.
 
-1. Normalise the email as login does. Unknown email: stop here.
-2. Take the per-address cooldown. If a mail went to this address in the last
-   minute, stop here. This keeps someone from flooding a victim's inbox.
+In the background:
+
+1. Look the user up. Unknown email: stop.
+2. Take a **send slot** for the address (one Lua script): refused if a mail
+   went out in the last minute, or if 5 already went out in the last 24 hours.
+   The per-IP rate limit alone would let someone with many IPs flood a
+   victim's inbox; the daily cap does not care how many IPs they have.
 3. Generate 32 random bytes (base64url, no padding) and store only their
    SHA-256, for 30 minutes. Storing a new token invalidates the user's previous
-   one, so only the latest link works.
-4. Build the link (`resetURL` + `?token=`) and send it **in the background**
-   with a 10 s timeout (`sendAsync`). Sending inside the request would make
-   registered emails measurably slower than unknown ones.
+   one, so only the latest link works. If storing fails, the slot is given
+   back, so the user's retry is not silently swallowed by the cooldown.
+4. Build the link (`resetURL` + `?token=`) and mail it.
 
 **`ResetPassword(ctx, token, password)`**:
 
@@ -191,9 +199,7 @@ link. Putting it back would let a failing request be retried forever.
 
 Two limits worth knowing: an access token issued before the reset stays valid
 until it expires (at most 15 minutes), and refresh tokens issued before the
-per-user index existed are not revoked. A request for a registered email also
-does a few more Redis calls than one for an unknown email, a sub-millisecond
-difference.
+per-user index existed are not revoked.
 
 ## Before you change it
 

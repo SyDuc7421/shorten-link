@@ -471,21 +471,44 @@ func TestTokenRedis_DeletePasswordReset(t *testing.T) {
 	}
 }
 
-func TestTokenRedis_AcquireResetCooldown(t *testing.T) {
+func TestTokenRedis_AcquireResetSlot_Cooldown(t *testing.T) {
 	cache := repository.NewTokenRedis(setupRedis(t))
 	ctx := context.Background()
 
-	first, err := cache.AcquireResetCooldown(ctx, "a@x.com", time.Minute)
+	first, err := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5)
 	if err != nil || !first {
 		t.Fatalf("first acquire: got (%v, %v), want (true, nil)", first, err)
 	}
-	second, err := cache.AcquireResetCooldown(ctx, "a@x.com", time.Minute)
+	second, err := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5)
 	if err != nil || second {
-		t.Errorf("second acquire: got (%v, %v), want (false, nil)", second, err)
+		t.Errorf("second acquire within the cooldown: got (%v, %v), want (false, nil)", second, err)
 	}
-	other, _ := cache.AcquireResetCooldown(ctx, "b@x.com", time.Minute)
-	if !other {
+	if other, _ := cache.AcquireResetSlot(ctx, "b@x.com", time.Minute, 24*time.Hour, 5); !other {
 		t.Error("cooldown must be per email")
+	}
+
+	// A failed attempt gives the slot back, so the user can retry at once.
+	if err := cache.ReleaseResetSlot(ctx, "a@x.com"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if again, _ := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5); !again {
+		t.Error("acquire after release: want true")
+	}
+}
+
+func TestTokenRedis_AcquireResetSlot_DailyCap(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	for i := 1; i <= 3; i++ {
+		ok, err := cache.AcquireResetSlot(ctx, "v@x.com", time.Millisecond, 24*time.Hour, 3)
+		if err != nil || !ok {
+			t.Fatalf("acquire %d: got (%v, %v), want (true, nil)", i, ok, err)
+		}
+		time.Sleep(5 * time.Millisecond) // let the 1 ms cooldown expire
+	}
+	if ok, _ := cache.AcquireResetSlot(ctx, "v@x.com", time.Millisecond, 24*time.Hour, 3); ok {
+		t.Error("fourth acquire within the window: want false (daily cap)")
 	}
 }
 

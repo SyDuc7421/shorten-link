@@ -182,6 +182,7 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `internal/service` | Business logic and the interfaces it depends on | `link_service.go`, `auth_service.go` |
 | `internal/repository` | MySQL (`*_mysql.go`) and Redis (`*_redis.go`) implementations | `link_mysql.go` |
 | `internal/messaging` | RabbitMQ topology, publisher, click and DLQ consumers | `setup.go` |
+| `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
 | `internal/ctxkey` | Typed context key for the authenticated user ID | — |
 | `internal/logger` | zap logger, stored in and read from the request context | — |

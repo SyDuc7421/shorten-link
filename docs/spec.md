@@ -50,7 +50,7 @@ WAF, captcha, payments.
 | FR-L7 | Owner deletes a link; it stops redirecting immediately | ✅ cache invalidated |
 | FR-L8 | Only the owner can list or delete their links | ✅ |
 | FR-L9 | Daily quota per user (`users.quota_daily`) is enforced on creation | ✅ per UTC day, `429` + `Retry-After`; deleted links do not count; concurrent creates can overshoot slightly |
-| FR-L10 | Abuse handling: block known phishing/malware targets, report and disable links | ❌ |
+| FR-L10 | Abuse handling: block known phishing/malware targets, report and disable links | ⚠️ admins can disable links and users (410); no automatic URL check, no user reports |
 | FR-L11 | Optional custom alias (3–16 of `A-Za-z0-9_-`, case-sensitive; `api`, `docs`, `healthz`, `metrics` reserved); taken → `409`. `GET /api/links/availability?alias=` checks it while typing (60/min per IP) | ✅ |
 
 ### 2.3 Analytics
@@ -61,7 +61,21 @@ WAF, captcha, payments.
 | FR-S2 | Per-day click history (`analytics_daily`) | ❌ table exists, worker never writes it |
 | FR-S3 | `GET /api/links/{code}/stats` and `/stats/summary` | ❌ planned (roadmap phase 4) |
 
-### 2.4 Operations endpoints
+### 2.4 Administration
+
+| ID | Requirement | Status |
+|---|---|---|
+| FR-ADM1 | Only enabled users with role `admin` can call `/api/admin/*`; checked against the database on every request | ✅ `RequireAdmin` |
+| FR-ADM2 | The first admin is granted outside HTTP | ✅ `server admin grant <email>` |
+| FR-ADM3 | Admins list and search users and links, newest first, paged | ✅ `LIKE` search scans the table (fine at current size) |
+| FR-ADM4 | Admins change a user's daily quota | ✅ |
+| FR-ADM5 | Disabling a user blocks login, ends sessions, refuses link creation and stops all their links | ✅ access token works up to 15 min for read-only calls |
+| FR-ADM6 | Admins disable, enable and delete any link; a disabled link answers 410 | ✅ |
+| FR-ADM7 | Admins read the audit log | ✅ |
+| FR-ADM8 | Dashboard numbers (totals, per-day series) | ❌ planned ([admin design](superpowers/specs/2026-10-18-admin-design.md), plan 2) |
+| FR-ADM9 | Admin web UI | ❌ planned (plan 3, `shorten-link-gui`) |
+
+### 2.5 Operations endpoints
 
 | ID | Requirement | Status |
 |---|---|---|
@@ -99,7 +113,7 @@ WAF, captcha, payments.
 | NFR-S9 | JWT signing key can be rotated without logging everyone out (`kid`) | ❌ |
 | NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.9, 0 reachable findings; enforced in CI |
 | NFR-S11 | Redis and RabbitMQ require authentication in production | ✅ prod compose refuses to start without `REDIS_PASSWORD` / `RABBITMQ_*` |
-| NFR-S12 | Audit trail for security-relevant actions | ❌ `audit_log` table unused |
+| NFR-S12 | Audit trail for security-relevant actions | ⚠️ every admin action is in `audit_log` (same transaction); logins, password resets and user actions are not |
 
 ### 3.3 Reliability
 
@@ -177,7 +191,7 @@ Ordered by risk if you launch without it.
 2. ~~Go toolchain + dependency upgrades, `govulncheck`~~ ✅ done
 3. ~~CI pipeline~~ ✅ done (verify on first GitHub run)
 4. MySQL backups (NFR-D3). Redis AOF is done.
-5. Abuse handling: Safe Browsing check on create and a way to disable a link (FR-L10). Public shorteners get abused within days.
+5. Abuse handling: Safe Browsing check on create (FR-L10). Admins can already disable links and users. Public shorteners get abused within days.
 6. ~~Enforce `quota_daily` (FR-L9).~~ ✅ done
 7. ~~Recover middleware + per-request access log (NFR-R9, OB1).~~ ✅ done
 8. Update `openapi.yaml` (FR-O4).

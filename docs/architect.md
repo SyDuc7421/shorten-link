@@ -256,7 +256,7 @@ to 3 attempts.
 
 | Key | Value | TTL |
 |---|---|---|
-| `sl:<code>` | original URL | ≤ 24h, never past expiry |
+| `sl:<code>` | original URL, or `!disabled` for a disabled link | ≤ 24h, never past expiry; 5 min for `!disabled` |
 | `rt:<jti>` | user ID | 7 days |
 | `urt:<userID>` | set of the user's refresh token IDs | 7 days |
 | `urv:<userID>` | time of the user's last "revoke all sessions" | 7 days |

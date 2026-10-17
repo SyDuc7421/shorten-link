@@ -69,7 +69,7 @@ WAF, captcha, payments.
 | FR-ADM2 | The first admin is granted outside HTTP | ✅ `server admin grant <email>` |
 | FR-ADM3 | Admins list and search users and links, newest first, paged | ✅ `LIKE` search scans the table (fine at current size) |
 | FR-ADM4 | Admins change a user's daily quota | ✅ |
-| FR-ADM5 | Disabling a user blocks login, ends sessions, refuses link creation and stops all their links | ✅ access token works up to 15 min for read-only calls |
+| FR-ADM5 | Disabling a user blocks login, ends sessions, refuses link creation and stops all their links | ✅ the access token keeps working up to 15 min for listing and deleting their own links |
 | FR-ADM6 | Admins disable, enable and delete any link; a disabled link answers 410 | ✅ |
 | FR-ADM7 | Admins read the audit log | ✅ |
 | FR-ADM8 | Dashboard numbers (totals, per-day series) | ❌ planned ([admin design](superpowers/specs/2026-10-18-admin-design.md), plan 2) |

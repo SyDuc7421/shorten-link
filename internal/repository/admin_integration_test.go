@@ -146,6 +146,12 @@ func TestAdminMySQL_UserWrites(t *testing.T) {
 	if u, _ := repo.GetUser(ctx, 2, 0); u.QuotaDaily != 5 {
 		t.Errorf("quota not saved: %d", u.QuotaDaily)
 	}
+	if err := repo.SetUserQuota(ctx, 1, 2, 5, "same again"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(auditRows(t, db, "user.quota")); n != 1 {
+		t.Errorf("setting the same quota must not write an audit row, got %d rows", n)
+	}
 	if err := repo.SetUserQuota(ctx, 1, 999, 5, ""); !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("quota unknown: want ErrNotFound, got %v", err)
 	}

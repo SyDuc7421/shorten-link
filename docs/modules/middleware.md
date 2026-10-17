@@ -68,7 +68,9 @@ must not take redirects down with it.
 Browsers only let a page on another origin call the API if the response
 carries the right CORS headers. `CORS(allowedOrigins)` adds them only when the
 request's `Origin` exactly matches one of `ALLOWED_ORIGINS` (case-insensitive,
-trailing slash ignored). With an empty list, no cross-origin call is allowed.
+trailing slash ignored). Allowed methods are `GET, POST, PATCH, DELETE, OPTIONS`;
+a method missing here fails in the browser's preflight even though the route
+works with curl (`PATCH` is used by `/api/admin/users/{id}`). With an empty list, no cross-origin call is allowed.
 
 Every `OPTIONS` request (a browser "preflight") is answered with `204`
 immediately and never reaches a handler.

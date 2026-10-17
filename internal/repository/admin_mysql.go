@@ -182,6 +182,9 @@ func (r *adminMySQL) SetUserQuota(ctx context.Context, actorID, userID int64, qu
 		if err := tx.GetContext(ctx, &before, `SELECT quota_daily FROM users WHERE id = ? FOR UPDATE`, userID); err != nil {
 			return notFound(err)
 		}
+		if before == quota {
+			return nil
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE users SET quota_daily = ? WHERE id = ?`, quota, userID); err != nil {
 			return fmt.Errorf("repository: set quota: %w", err)
 		}

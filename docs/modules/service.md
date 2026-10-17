@@ -256,6 +256,17 @@ cache consistent with the database.
   admin API all check the database.
 - **`EnableUser`** clears the flag and purges the cache again, which removes
   the `!disabled` markers. Links an admin disabled one by one stay disabled.
+- **Known gaps (cache races, all milliseconds wide, accepted):**
+  - A redirect that missed the cache and read the row just before a
+    disable can write the old URL back after the purge; it then redirects
+    until the cache TTL (up to 24 h).
+  - The reverse for enable: a redirect that read the row just before the
+    enable can write `!disabled` after the purge, so the link answers 410 for
+    up to 5 minutes.
+  - A link the user creates while being disabled can be inserted after
+    `DisableUser` listed their codes; `Shorten` then warms the cache with its
+    URL and it redirects for up to 24 h. A second purge later would close all
+    three if they are ever seen in practice.
 - **Link disable/enable/delete** write through the repository, then delete
   `sl:<code>`.
 - **`GetUser`** adds links created today (UTC, via `idgen.MinIDAt`) and total

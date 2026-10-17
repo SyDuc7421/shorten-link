@@ -84,8 +84,9 @@ search is `LIKE '%q%'` with `%`, `_` and `\` in the query escaped
 `DeleteLink`, `SetRole`) each run in one transaction: lock the row with
 `SELECT ... FOR UPDATE`, change it, and insert the `audit_log` row. If any step
 fails, nothing is kept, so there is never a change without its audit entry.
-When the row is already in the requested state, nothing is written (no audit
-row) and `changed` is `false`. Unknown IDs, codes or emails give
+When the row is already in the requested state (same disabled flag, role or
+quota), nothing is written and no audit row is added; the methods that return
+`changed` report `false`. Unknown IDs, codes or emails give
 `ErrNotFound`.
 
 `audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`

@@ -32,8 +32,12 @@ type Link struct {
 	OriginalURL string
 	Clicks      int64
 	ExpiresAt   *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	DisabledAt  *time.Time // set while an admin has disabled the link
+	// OwnerDisabled is true when the owner's account is disabled. Only
+	// GetByCode fills it.
+	OwnerDisabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // LinkRepository is the persistence interface, defined here at the consumer site.

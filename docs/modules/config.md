@@ -43,7 +43,7 @@ only by Docker Compose, not by the Go programs.
 
 | Method | What it does |
 |---|---|
-| `OpenMySQL(ctx)` | Opens a pool (50 open, 20 idle, connections recycled after 5 min) with `parseTime=true`, then pings. Fails if the ping fails |
+| `OpenMySQL(ctx)` | Opens a pool (50 open, 20 idle, connections recycled after 5 min) with `parseTime=true` and the session time zone set to UTC (`time_zone='+00:00'`, so `DATE()` and `CURDATE()` use the UTC day), then pings. Fails if the ping fails |
 | `NewRedisClient(ctx)` | Creates a client with a pool of 100, then pings |
 | `DialRabbitMQ()` | Dials once. The server passes this function to the publisher, which calls it again on every reconnect |
 

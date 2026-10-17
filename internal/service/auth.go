@@ -21,13 +21,21 @@ var ErrAccountLocked = errors.New("service: account temporarily locked")
 // ErrWeakPassword is returned when a password is shorter than 8 or longer than 72 bytes.
 var ErrWeakPassword = errors.New("service: password must be 8-72 bytes")
 
+// User roles.
+const (
+	RoleUser  = "user"
+	RoleAdmin = "admin"
+)
+
 // User is the auth domain model.
 type User struct {
 	ID           int64
 	Email        string
 	PasswordHash string
 	Plan         string
+	Role         string // RoleUser or RoleAdmin
 	QuotaDaily   int
+	DisabledAt   *time.Time // set while an admin has disabled the account
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

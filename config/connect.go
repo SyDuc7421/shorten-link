@@ -12,7 +12,9 @@ import (
 )
 
 func (c *Config) OpenMySQL(ctx context.Context) (*sqlx.DB, error) {
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true",
+	// time_zone='+00:00': the session works in UTC, so DATE() and CURDATE()
+	// agree with the UTC day used for quotas and stats.
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true&time_zone=%%27%%2B00%%3A00%%27",
 		c.MySQLUser, c.MySQLPassword, c.MySQLHost, c.MySQLPort, c.MySQLDB)
 	db, err := sqlx.Open("mysql", dsn)
 	if err != nil {

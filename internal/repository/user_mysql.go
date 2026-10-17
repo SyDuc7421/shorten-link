@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -45,13 +46,15 @@ func (r *userMySQL) Create(ctx context.Context, user *service.User) error {
 }
 
 func (r *userMySQL) GetByEmail(ctx context.Context, email string) (*service.User, error) {
-	const q = `SELECT id, email, password_hash, plan, quota_daily FROM users WHERE email = ?`
+	const q = `SELECT id, email, password_hash, plan, role, quota_daily, disabled_at FROM users WHERE email = ?`
 	var row struct {
-		ID           int64  `db:"id"`
-		Email        string `db:"email"`
-		PasswordHash string `db:"password_hash"`
-		Plan         string `db:"plan"`
-		QuotaDaily   int    `db:"quota_daily"`
+		ID           int64      `db:"id"`
+		Email        string     `db:"email"`
+		PasswordHash string     `db:"password_hash"`
+		Plan         string     `db:"plan"`
+		Role         string     `db:"role"`
+		QuotaDaily   int        `db:"quota_daily"`
+		DisabledAt   *time.Time `db:"disabled_at"`
 	}
 	if err := r.db.GetContext(ctx, &row, q, email); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -64,18 +67,22 @@ func (r *userMySQL) GetByEmail(ctx context.Context, email string) (*service.User
 		Email:        row.Email,
 		PasswordHash: row.PasswordHash,
 		Plan:         row.Plan,
+		Role:         row.Role,
 		QuotaDaily:   row.QuotaDaily,
+		DisabledAt:   row.DisabledAt,
 	}, nil
 }
 
 func (r *userMySQL) GetByID(ctx context.Context, id int64) (*service.User, error) {
-	const q = `SELECT id, email, password_hash, plan, quota_daily FROM users WHERE id = ?`
+	const q = `SELECT id, email, password_hash, plan, role, quota_daily, disabled_at FROM users WHERE id = ?`
 	var row struct {
-		ID           int64  `db:"id"`
-		Email        string `db:"email"`
-		PasswordHash string `db:"password_hash"`
-		Plan         string `db:"plan"`
-		QuotaDaily   int    `db:"quota_daily"`
+		ID           int64      `db:"id"`
+		Email        string     `db:"email"`
+		PasswordHash string     `db:"password_hash"`
+		Plan         string     `db:"plan"`
+		Role         string     `db:"role"`
+		QuotaDaily   int        `db:"quota_daily"`
+		DisabledAt   *time.Time `db:"disabled_at"`
 	}
 	if err := r.db.GetContext(ctx, &row, q, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -88,7 +95,9 @@ func (r *userMySQL) GetByID(ctx context.Context, id int64) (*service.User, error
 		Email:        row.Email,
 		PasswordHash: row.PasswordHash,
 		Plan:         row.Plan,
+		Role:         row.Role,
 		QuotaDaily:   row.QuotaDaily,
+		DisabledAt:   row.DisabledAt,
 	}, nil
 }
 

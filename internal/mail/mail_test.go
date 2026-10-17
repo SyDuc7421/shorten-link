@@ -3,8 +3,13 @@ package mail
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,8 +71,15 @@ func TestLogMailer_LogsLink(t *testing.T) {
 	}
 }
 
-// fakeSMTP accepts one plain-text SMTP session and returns the DATA it received.
-func fakeSMTP(t *testing.T) (host string, port int, got <-chan string) {
+type fakeOpts struct {
+	cert        *tls.Certificate // required for implicitTLS and startTLS
+	implicitTLS bool             // TLS from the first byte (port 465 style)
+	startTLS    bool             // advertise and accept STARTTLS
+}
+
+// fakeSMTP accepts one SMTP session and returns what it received after MAIL,
+// prefixed with "tls:" if the session was encrypted by then.
+func fakeSMTP(t *testing.T, opts fakeOpts) (addr string, got <-chan string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -81,6 +93,11 @@ func fakeSMTP(t *testing.T) (host string, port int, got <-chan string) {
 			return
 		}
 		defer conn.Close()
+		encrypted := false
+		if opts.implicitTLS {
+			conn = tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*opts.cert}})
+			encrypted = true
+		}
 		r := bufio.NewReader(conn)
 		say := func(s string) { fmt.Fprintf(conn, "%s\r\n", s) } //nolint:errcheck // test server
 		say("220 fake ESMTP")
@@ -88,12 +105,26 @@ func fakeSMTP(t *testing.T) (host string, port int, got <-chan string) {
 		for {
 			line, err := r.ReadString('\n')
 			if err != nil {
+				ch <- "error: " + err.Error()
 				return
 			}
 			switch cmd := strings.ToUpper(strings.TrimSpace(line)); {
 			case strings.HasPrefix(cmd, "EHLO"), strings.HasPrefix(cmd, "HELO"):
-				say("250 fake")
+				if opts.startTLS && !encrypted {
+					say("250-fake")
+					say("250 STARTTLS")
+				} else {
+					say("250 fake")
+				}
+			case cmd == "STARTTLS":
+				say("220 ready")
+				conn = tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{*opts.cert}})
+				r = bufio.NewReader(conn)
+				encrypted = true
 			case strings.HasPrefix(cmd, "MAIL"), strings.HasPrefix(cmd, "RCPT"):
+				if encrypted && strings.HasPrefix(cmd, "MAIL") {
+					data.WriteString("tls:")
+				}
 				data.WriteString(strings.TrimSpace(line) + "\n")
 				say("250 ok")
 			case cmd == "DATA":
@@ -115,17 +146,35 @@ func fakeSMTP(t *testing.T) (host string, port int, got <-chan string) {
 			}
 		}
 	}()
-	addr := ln.Addr().(*net.TCPAddr)
-	return "127.0.0.1", addr.Port, ch
+	return ln.Addr().String(), ch
+}
+
+// testCert borrows httptest's self-signed certificate, valid for example.com
+// and 127.0.0.1, and returns a pool that trusts it.
+func testCert(t *testing.T) (*tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	cert := srv.TLS.Certificates[0]
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	srv.Close()
+	return &cert, pool
+}
+
+func sendVia(t *testing.T, m *SMTPMailer) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return m.SendPasswordReset(ctx, "user@example.com", "https://x/reset?token=t")
 }
 
 func TestSMTPMailer_Sends(t *testing.T) {
-	host, port, got := fakeSMTP(t)
+	addr, got := fakeSMTP(t, fakeOpts{})
+	host, port := splitHostPort(t, addr)
+	// Plain text is acceptable only because the relay is on loopback.
 	m := NewSMTPMailer(SMTPConfig{Host: host, Port: port, From: "no-reply@example.com"}, zap.NewNop())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := m.SendPasswordReset(ctx, "user@example.com", "https://x/reset?token=t"); err != nil {
+	if err := sendVia(t, m); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	s := <-got
@@ -134,6 +183,66 @@ func TestSMTPMailer_Sends(t *testing.T) {
 			t.Errorf("session missing %q:\n%s", want, s)
 		}
 	}
+}
+
+func TestSMTPMailer_UpgradesWithSTARTTLS(t *testing.T) {
+	cert, pool := testCert(t)
+	addr, got := fakeSMTP(t, fakeOpts{cert: cert, startTLS: true})
+	m := NewSMTPMailer(SMTPConfig{Host: "example.com", Port: 587, From: "no-reply@example.com"}, zap.NewNop())
+	m.dialAddr, m.rootCAs = addr, pool
+
+	if err := sendVia(t, m); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if s := <-got; !strings.HasPrefix(s, "tls:") {
+		t.Errorf("mail was sent before TLS was established:\n%s", s)
+	}
+}
+
+// A man in the middle can strip STARTTLS from the server's reply. Sending
+// anyway would put the reset link on the wire in clear text.
+func TestSMTPMailer_RefusesPlaintextToRemoteHost(t *testing.T) {
+	addr, got := fakeSMTP(t, fakeOpts{})
+	m := NewSMTPMailer(SMTPConfig{Host: "smtp.example.com", Port: 587, From: "no-reply@example.com"}, zap.NewNop())
+	m.dialAddr = addr
+
+	if err := sendVia(t, m); err == nil {
+		t.Fatal("want error when a remote relay does not offer STARTTLS")
+	}
+	select {
+	case s := <-got:
+		if strings.Contains(s, "token=") {
+			t.Errorf("the link reached the server in clear text:\n%s", s)
+		}
+	case <-time.After(time.Second):
+	}
+}
+
+func TestSMTPMailer_ImplicitTLSOnPort465(t *testing.T) {
+	cert, pool := testCert(t)
+	addr, got := fakeSMTP(t, fakeOpts{cert: cert, implicitTLS: true})
+	m := NewSMTPMailer(SMTPConfig{Host: "example.com", Port: 465, From: "no-reply@example.com"}, zap.NewNop())
+	m.dialAddr, m.rootCAs = addr, pool
+
+	if err := sendVia(t, m); err != nil {
+		t.Fatalf("send over implicit TLS: %v", err)
+	}
+	if s := <-got; !strings.HasPrefix(s, "tls:") {
+		t.Errorf("want an encrypted session:\n%s", s)
+	}
+}
+
+func splitHostPort(t *testing.T, addr string) (string, int) {
+	t.Helper()
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host, port
 }
 
 func TestSMTPMailer_UnreachableServer(t *testing.T) {

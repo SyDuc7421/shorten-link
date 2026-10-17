@@ -4,6 +4,7 @@ package mail
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/mail"
@@ -24,11 +25,17 @@ type SMTPConfig struct {
 	From     string
 }
 
-// SMTPMailer sends mail through an SMTP relay, upgrading to TLS with STARTTLS
-// when the server offers it.
+// SMTPMailer sends mail through an SMTP relay. The connection is always
+// encrypted, except to a relay on this machine: TLS from the start on port 465,
+// STARTTLS on any other port. A remote relay that does not offer STARTTLS is
+// refused, because a man in the middle can strip the offer to read the link.
 type SMTPMailer struct {
 	cfg SMTPConfig
 	log *zap.Logger
+
+	// Set by tests only: connect here instead of Host:Port, and trust these CAs.
+	dialAddr string
+	rootCAs  *x509.CertPool
 }
 
 // NewSMTPMailer constructs an SMTPMailer.
@@ -51,8 +58,22 @@ func (m *SMTPMailer) SendPasswordReset(ctx context.Context, to, link string) err
 
 func (m *SMTPMailer) send(ctx context.Context, to string, msg []byte) error {
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
+	if m.dialAddr != "" {
+		addr = m.dialAddr
+	}
+	tlsConfig := &tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12, RootCAs: m.rootCAs}
+
+	// Port 465 speaks TLS from the first byte ("implicit TLS"); reading a
+	// plain-text greeting there would hang until the deadline.
+	implicitTLS := m.cfg.Port == 465
 	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	var conn net.Conn
+	var err error
+	if implicitTLS {
+		conn, err = (&tls.Dialer{NetDialer: &d, Config: tlsConfig}).DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", addr)
+	}
 	if err != nil {
 		return fmt.Errorf("mail: dial %s: %w", addr, err)
 	}
@@ -68,9 +89,13 @@ func (m *SMTPMailer) send(ctx context.Context, to string, msg []byte) error {
 	}
 	defer c.Close()
 
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: m.cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
-			return fmt.Errorf("mail: starttls: %w", err)
+	if !implicitTLS {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(tlsConfig); err != nil {
+				return fmt.Errorf("mail: starttls: %w", err)
+			}
+		} else if !isLoopback(m.cfg.Host) {
+			return fmt.Errorf("mail: %s does not offer STARTTLS; refusing to send in clear text", m.cfg.Host)
 		}
 	}
 	if m.cfg.Username != "" {
@@ -97,6 +122,14 @@ func (m *SMTPMailer) send(ctx context.Context, to string, msg []byte) error {
 		return fmt.Errorf("mail: end body: %w", err)
 	}
 	return c.Quit()
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // LogMailer writes the link to the log instead of sending mail. It is used when

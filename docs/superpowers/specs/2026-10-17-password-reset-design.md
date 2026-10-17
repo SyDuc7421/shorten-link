@@ -251,3 +251,21 @@ error mapping. `pnpm verify` passes.
   `repository`, `handler`, `config`, `server`, and a new `mail.md`; `.env.example`;
   `docs/deploy.md`.
 - GUI: `messages/en.json`; `README.md` if it lists routes.
+
+## 8. Revisions after code review (2026-10-17)
+
+A review of the first implementation found ten defects. The design changed as
+follows; where this section and the sections above disagree, this one wins.
+
+| # | Problem | Change |
+|---|---|---|
+| 1 | A refresh that consumed its old token just before a reset could store its new token after the revoke | `RevokeAllRefreshTokens` is one Lua script that records the revoke time in `urv:<userID>` and deletes every indexed token. `StoreRefreshToken` is a Lua script that refuses a token whose credential was checked (`authorizedAt`) at or before that time. Login and Refresh capture `authorizedAt` before checking the password or consuming the old token |
+| 2 | Registered emails did more work before the response and could return 500 when Redis failed, revealing them | `RequestPasswordReset` returns nothing and does all work (lookup, storage, mail) in a goroutine after the 202; failures are logged with the request logger. forgot-password never answers 500 |
+| 3 | A failed revoke after the password change left old sessions alive | Revoke, then change the password, then revoke again (3 attempts). If the first revoke fails the password is unchanged |
+| 4 | STARTTLS was optional, so it could be stripped | TLS is required except to a loopback relay |
+| 5 | Port 465 (implicit TLS) hung | Port 465 uses TLS from the first byte |
+| 6 | Without `SMTP_HOST` production silently logged working reset links | Log-only mail is allowed only when `PASSWORD_RESET_URL` is on localhost; otherwise the server refuses to start |
+| 7 | The cooldown was taken before the token was stored, swallowing retries after a failure | The slot is released when storing fails |
+| 8 | `PASSWORD_RESET_URL` was parsed per request and accepted relative URLs | Parsed once at startup: absolute http(s), a host, no query or fragment |
+| 9 | Register and Reset each had their own password-length check | One `validatePassword` |
+| 10 | Rotating IPs could still send ~1440 mails a day to one address | `AcquireResetSlot` (Lua) also caps mail at 5 per address per 24 h (`prt-daily:<email>`) |

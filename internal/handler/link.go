@@ -100,6 +100,10 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "alias already taken")
 		return
 	}
+	if errors.Is(err, service.ErrAccountDisabled) {
+		writeError(w, http.StatusForbidden, "account disabled")
+		return
+	}
 	if errors.Is(err, service.ErrQuotaExceeded) {
 		// The quota resets at 00:00 UTC; round up so a client never retries early.
 		now := time.Now().UTC()

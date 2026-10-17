@@ -626,15 +626,20 @@ func TestLinkMySQL_QuotaUsage(t *testing.T) {
 		}
 	}
 
-	used, limit, err := repo.QuotaUsage(ctx, 1, 20)
+	q, err := repo.QuotaUsage(ctx, 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if used != 2 || limit != 5 {
-		t.Errorf("want used=2 limit=5, got used=%d limit=%d", used, limit)
+	if q.Used != 2 || q.Limit != 5 || q.Disabled {
+		t.Errorf("want used=2 limit=5 enabled, got %+v", q)
 	}
 
-	if _, _, err := repo.QuotaUsage(ctx, 999, 0); !errors.Is(err, service.ErrNotFound) {
+	db.ExecContext(ctx, `UPDATE users SET disabled_at = UTC_TIMESTAMP() WHERE id = 1`) //nolint:errcheck
+	if q, err := repo.QuotaUsage(ctx, 1, 20); err != nil || !q.Disabled {
+		t.Errorf("want Disabled after disabling user, got %+v, %v", q, err)
+	}
+
+	if _, err := repo.QuotaUsage(ctx, 999, 0); !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("unknown user: want ErrNotFound, got %v", err)
 	}
 }

@@ -15,6 +15,9 @@ var ErrInvalidCredentials = errors.New("service: invalid email or password")
 // ErrInvalidToken is returned when a JWT or refresh token is invalid/expired.
 var ErrInvalidToken = errors.New("service: invalid or expired token")
 
+// ErrAccountDisabled is returned when an admin has disabled the account.
+var ErrAccountDisabled = errors.New("service: account disabled")
+
 // ErrAccountLocked is returned after too many consecutive failed login attempts.
 var ErrAccountLocked = errors.New("service: account temporarily locked")
 

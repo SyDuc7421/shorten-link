@@ -24,6 +24,13 @@ var ErrCodeTaken = errors.New("service: short code already taken")
 // ErrQuotaExceeded is returned when a user has created quota_daily links today (UTC).
 var ErrQuotaExceeded = errors.New("service: daily link quota exceeded")
 
+// Quota is a user's link-creation allowance for the current UTC day.
+type Quota struct {
+	Used     int
+	Limit    int
+	Disabled bool
+}
+
 // Link is the core domain model for a shortened URL.
 type Link struct {
 	ID          int64
@@ -47,9 +54,10 @@ type LinkRepository interface {
 	Delete(ctx context.Context, code string, userID int64) error
 	ListByUser(ctx context.Context, userID int64, afterID int64, limit int) ([]*Link, error)
 	BatchUpdateClicks(ctx context.Context, counts map[string]int64) error
-	// QuotaUsage returns how many links userID created with id >= sinceID, and
-	// the user's quota_daily. ErrNotFound if the user does not exist.
-	QuotaUsage(ctx context.Context, userID, sinceID int64) (used, limit int, err error)
+	// QuotaUsage returns how many links userID created with id >= sinceID, the
+	// user's quota_daily and whether the account is disabled. ErrNotFound if
+	// the user does not exist.
+	QuotaUsage(ctx context.Context, userID, sinceID int64) (Quota, error)
 }
 
 // LinkCache is the cache interface, defined here at the consumer site.

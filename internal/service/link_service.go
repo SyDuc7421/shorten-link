@@ -72,11 +72,14 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias s
 	// id >= the smallest ID of today's midnight. Concurrent requests can each
 	// pass this check and overshoot by a few; the create rate limit bounds that.
 	midnight := time.Now().UTC().Truncate(24 * time.Hour)
-	used, limit, err := s.repo.QuotaUsage(ctx, userID, idgen.MinIDAt(midnight))
+	quota, err := s.repo.QuotaUsage(ctx, userID, idgen.MinIDAt(midnight))
 	if err != nil {
 		return nil, fmt.Errorf("service: shorten: quota: %w", err)
 	}
-	if used >= limit {
+	if quota.Disabled {
+		return nil, ErrAccountDisabled
+	}
+	if quota.Used >= quota.Limit {
 		return nil, ErrQuotaExceeded
 	}
 

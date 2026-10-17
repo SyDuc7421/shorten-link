@@ -18,7 +18,7 @@ type mockRepo struct {
 	deleteErr   error
 	listFn      func() ([]*service.Link, error)
 	createFn    func(link *service.Link) error // overrides createErr when set
-	quotaFn     func(userID, sinceID int64) (used, limit int, err error)
+	quotaFn     func(userID, sinceID int64) (service.Quota, error)
 }
 
 func (m *mockRepo) Create(_ context.Context, link *service.Link) error {
@@ -35,9 +35,9 @@ func (m *mockRepo) ListByUser(_ context.Context, _ int64, _ int64, _ int) ([]*se
 	return m.listFn()
 }
 func (m *mockRepo) BatchUpdateClicks(_ context.Context, _ map[string]int64) error { return nil }
-func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (int, int, error) {
+func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (service.Quota, error) {
 	if m.quotaFn == nil {
-		return 0, 100, nil
+		return service.Quota{Limit: 100}, nil
 	}
 	return m.quotaFn(userID, sinceID)
 }
@@ -434,7 +434,7 @@ func TestCheckAlias_RepoError(t *testing.T) {
 func TestShorten_QuotaExceeded(t *testing.T) {
 	created := false
 	repo := &mockRepo{
-		quotaFn:  func(_, _ int64) (int, int, error) { return 100, 100, nil },
+		quotaFn:  func(_, _ int64) (service.Quota, error) { return service.Quota{Used: 100, Limit: 100}, nil },
 		createFn: func(_ *service.Link) error { created = true; return nil },
 	}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
@@ -448,7 +448,7 @@ func TestShorten_QuotaExceeded(t *testing.T) {
 }
 
 func TestShorten_QuotaUnderLimitCreates(t *testing.T) {
-	repo := &mockRepo{quotaFn: func(_, _ int64) (int, int, error) { return 99, 100, nil }}
+	repo := &mockRepo{quotaFn: func(_, _ int64) (service.Quota, error) { return service.Quota{Used: 99, Limit: 100}, nil }}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	if _, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -457,9 +457,9 @@ func TestShorten_QuotaUnderLimitCreates(t *testing.T) {
 
 func TestShorten_QuotaCountsFromUTCMidnight(t *testing.T) {
 	var gotUser, gotSince int64
-	repo := &mockRepo{quotaFn: func(userID, sinceID int64) (int, int, error) {
+	repo := &mockRepo{quotaFn: func(userID, sinceID int64) (service.Quota, error) {
 		gotUser, gotSince = userID, sinceID
-		return 0, 100, nil
+		return service.Quota{Limit: 100}, nil
 	}}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	if _, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil); err != nil {
@@ -472,10 +472,26 @@ func TestShorten_QuotaCountsFromUTCMidnight(t *testing.T) {
 }
 
 func TestShorten_QuotaRepoError(t *testing.T) {
-	repo := &mockRepo{quotaFn: func(_, _ int64) (int, int, error) { return 0, 0, errors.New("db down") }}
+	repo := &mockRepo{quotaFn: func(_, _ int64) (service.Quota, error) { return service.Quota{}, errors.New("db down") }}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	_, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil)
 	if err == nil || errors.Is(err, service.ErrQuotaExceeded) {
 		t.Errorf("want plain error, got %v", err)
+	}
+}
+
+func TestShorten_DisabledUser(t *testing.T) {
+	created := false
+	repo := &mockRepo{
+		quotaFn:  func(_, _ int64) (service.Quota, error) { return service.Quota{Limit: 100, Disabled: true}, nil },
+		createFn: func(_ *service.Link) error { created = true; return nil },
+	}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+	_, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil)
+	if !errors.Is(err, service.ErrAccountDisabled) {
+		t.Fatalf("want ErrAccountDisabled, got %v", err)
+	}
+	if created {
+		t.Error("link created for a disabled user")
 	}
 }

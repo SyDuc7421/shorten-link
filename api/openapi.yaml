@@ -140,6 +140,16 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: "invalid email or password"
+        "403":
+          description: |
+            The password is right but an admin has disabled the account. Only
+            returned after the password matched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "account disabled"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
@@ -183,7 +193,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Refresh token invalid, expired or already used
+          description: Refresh token invalid, expired or already used, or the account is disabled
           content:
             application/json:
               schema:
@@ -312,6 +322,14 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: An admin has disabled the account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "account disabled"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "422":

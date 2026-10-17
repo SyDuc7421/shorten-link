@@ -57,9 +57,12 @@ cheapest first, and stops at the first failure:
    in a private, loopback, link-local or carrier-grade NAT range. Hostnames are
    resolved (2 s timeout) and **every** returned address is checked. A host
    that does not resolve is rejected as `ErrInvalidURL`.
-5. **Daily quota.** `repo.QuotaUsage` returns how many links the user created
-   since 00:00 UTC today and their `quota_daily` (100 by default). At or over
-   the quota, `Shorten` returns `ErrQuotaExceeded`. "Since midnight" is
+5. **Account and daily quota.** `repo.QuotaUsage` returns how many links the
+   user created since 00:00 UTC today, their `quota_daily` (100 by default)
+   and whether the account is disabled. A disabled account gets
+   `ErrAccountDisabled`; this is what stops a disabled user whose access token
+   has not expired yet. At or over the quota, `Shorten` returns
+   `ErrQuotaExceeded`. "Since midnight" is
    `id >= idgen.MinIDAt(midnight)`: link IDs are time-ordered, so no
    timestamp column or time-zone setting is involved. Deleted links no longer
    count. Two requests running at the same moment can both pass and overshoot
@@ -124,7 +127,10 @@ plan with a daily quota of 100, and a token pair is issued.
 3. On a mismatch, increment the failure counter (it expires 15 minutes after
    the first failure) and return `ErrInvalidCredentials`, or `ErrAccountLocked`
    if this was the fifth failure.
-4. On success, clear the counter and issue a token pair.
+4. On success, clear the counter. If an admin has disabled the account
+   (`users.disabled_at` set), return `ErrAccountDisabled`; otherwise issue a
+   token pair. The disabled check comes after the password check on purpose:
+   only someone who knows the password learns that the account is disabled.
 
 **Why the dummy hash?** Without it, a login for an unknown email would return
 almost instantly, while a real email would take ~0.25 s for bcrypt. That
@@ -144,6 +150,8 @@ emails also count toward the lockout, for the same reason.
 Redis with an atomic get-and-delete, and issues a brand-new pair. A refresh
 token therefore works exactly once, even if two requests race with it. A reused
 token is answered with `ErrInvalidToken`, and the user has to log in again.
+After the consume, `Refresh` reads the user: a disabled (or deleted) account
+also gets `ErrInvalidToken`.
 
 Every refresh token is also recorded in a per-user index, so
 `RevokeAllRefreshTokens` can end all of a user's sessions at once. A password

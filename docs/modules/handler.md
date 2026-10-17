@@ -52,6 +52,7 @@ custom aliases.
 | `ErrInvalidAlias` | 400 | alias format rules |
 | `ErrForbiddenURL` | 422 | `URL targets a forbidden address` |
 | `ErrCodeTaken` | 409 | `alias already taken` |
+| `ErrAccountDisabled` | 403 | `account disabled` |
 | `ErrQuotaExceeded` | 429 | `daily link quota exceeded`, with `Retry-After` = seconds until 00:00 UTC |
 | body over 1 MB | 413 | `request body too large` |
 | anything else | 500 | `failed to shorten URL` |
@@ -85,7 +86,7 @@ Register, login and refresh return the same body on success:
 | Endpoint | Success | Errors |
 |---|---|---|
 | register | 201 | 400 missing field or password not 8–72 bytes, 409 email taken |
-| login | 200 | 400 missing field, 401 wrong email or password, 429 account locked |
+| login | 200 | 400 missing field, 401 wrong email or password, 403 `account disabled` (only with the right password), 429 account locked |
 | refresh | 200 | 400 missing token, 401 invalid, expired or already-used token |
 | forgot-password | 202, empty body | 400 missing email or bad JSON. Never 500: the work runs in the background |
 | reset-password | 204 | 400 missing field or password not 8–72 bytes, 401 invalid, expired or used token |

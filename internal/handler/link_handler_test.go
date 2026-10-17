@@ -371,6 +371,7 @@ func TestLinkHandler_Shorten_AliasErrors(t *testing.T) {
 		{service.ErrInvalidAlias, http.StatusBadRequest},
 		{fmt.Errorf("service: shorten: %w", service.ErrCodeTaken), http.StatusConflict},
 		{service.ErrQuotaExceeded, http.StatusTooManyRequests},
+		{service.ErrAccountDisabled, http.StatusForbidden},
 	} {
 		mux := newLinkMux(&mockLinkSvc{
 			shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {

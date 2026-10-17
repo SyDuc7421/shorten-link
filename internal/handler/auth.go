@@ -93,6 +93,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "account temporarily locked due to too many failed attempts")
 		return
 	}
+	if errors.Is(err, service.ErrAccountDisabled) {
+		writeError(w, http.StatusForbidden, "account disabled")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "login failed")
 		return

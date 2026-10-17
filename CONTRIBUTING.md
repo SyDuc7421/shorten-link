@@ -99,6 +99,25 @@ whole suite.
 - If you notice unrelated problems, write them down (issue, PR description,
   `docs/spec.md` status) instead of fixing them in the same change.
 
+### Keep docs in sync
+
+Docs change in the **same commit** as the code they describe. A reviewer
+should reject a change that leaves a page saying something false.
+
+| You changed… | Update |
+|---|---|
+| Anything inside a package | Its page in [docs/modules/](docs/modules/README.md) |
+| A new package or program | A new page in `docs/modules/`, a row in its index and in [architect.md §5](docs/architect.md#5-modules-one-by-one) |
+| A route, request/response field or status code | [api/openapi.yaml](api/openapi.yaml) and the routes table in [architect.md](docs/architect.md#routes) |
+| A requirement's behaviour or status | [docs/spec.md](docs/spec.md) |
+| An environment variable | `.env.example` (with a comment) and [docs/modules/config.md](docs/modules/config.md) |
+| A migration | [docs/modules/database.md](docs/modules/database.md) |
+| How to run or deploy | [README.md](README.md) and [docs/deploy.md](docs/deploy.md) |
+
+Write for someone new to the codebase: say what a thing does and **why** it
+is built that way, in plain sentences. Describe the code as it is, including
+known gaps, not as it should be.
+
 ### Commits and branches
 
 - Never commit to `master` directly. Branch: `fix/…`, `feat/…`, `docs/…`.
@@ -131,6 +150,7 @@ The repo is set up for agents such as Claude Code.
 | `docs/superpowers/specs/` | Design documents written **before** big changes |
 | `docs/superpowers/plans/` | Step-by-step implementation plans derived from a spec |
 | `docs/architect.md`, `docs/spec.md` | Context an agent should read before touching unfamiliar code |
+| `docs/modules/` | One page per package: how it works and why; read the page before changing the package |
 
 ### Recommended flow for non-trivial work
 
@@ -144,6 +164,8 @@ The repo is set up for agents such as Claude Code.
 
 - Read the relevant code before changing it; don't infer behaviour from names.
 - Ask when the request is ambiguous instead of picking silently.
+- Update the docs listed in [Keep docs in sync](#keep-docs-in-sync) in the
+  same commit as the code.
 - Do not commit secrets, `.env`, `keys/`, or build output (the root `worker`
   binary is a local build artifact; use `make build` → `bin/`).
 - Report test results truthfully, including failures you did not cause.

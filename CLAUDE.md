@@ -68,3 +68,16 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## 5. Keep Docs in Sync (project rule)
+
+**Every code change ships with its docs, in the same commit.**
+
+- Changed a package? Update its page in `docs/modules/`. New package or program? Add a page and list it in `docs/modules/README.md` and `docs/architect.md` §5.
+- Changed a route, field or status code? Update `api/openapi.yaml` and the routes table in `docs/architect.md`.
+- Also: `docs/spec.md` for requirement status, `.env.example` + `docs/modules/config.md` for env vars, `docs/modules/database.md` for migrations, `README.md` / `docs/deploy.md` for run and deploy steps.
+- Write for a developer new to the codebase: plain sentences, what it does and why. Describe the code as it is, including known gaps.
+
+The full checklist is in CONTRIBUTING.md, "Keep docs in sync".

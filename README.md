@@ -5,6 +5,7 @@ and a worker that counts clicks from RabbitMQ. Storage is MySQL, with Redis
 for caching and rate limiting.
 
 - Architecture: [docs/architect.md](docs/architect.md)
+- How each module works: [docs/modules/](docs/modules/README.md)
 - Requirements: [docs/spec.md](docs/spec.md)
 - API: [api/openapi.yaml](api/openapi.yaml), served as Swagger UI at `/docs`
 - Working on the code: [CONTRIBUTING.md](CONTRIBUTING.md)

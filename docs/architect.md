@@ -157,8 +157,9 @@ Every request passes through these, outermost first:
 | Method | Path | Auth | What it does |
 |---|---|---|---|
 | GET | `/{code}` | — | Redirect to the original URL |
-| POST | `/api/links` | ✔ | Create a short link |
+| POST | `/api/links` | ✔ | Create a short link (optional custom `alias`) |
 | GET | `/api/links?cursor=` | ✔ | List your links, 20 per page |
+| GET | `/api/links/availability?alias=` | ✔ | Check whether a custom alias can be used |
 | DELETE | `/api/links/{code}` | ✔ | Delete one of your links |
 | POST | `/api/auth/register` | — | Create account, returns tokens |
 | POST | `/api/auth/login` | — | Log in, returns tokens |
@@ -169,6 +170,8 @@ Every request passes through these, outermost first:
 ---
 
 ## 5. Modules, one by one
+
+Each package has its own page with the details in [modules/](modules/README.md).
 
 | Package | Responsibility | Read this first |
 |---|---|---|

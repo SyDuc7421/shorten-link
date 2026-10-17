@@ -244,7 +244,11 @@ to 3 attempts.
 |---|---|---|
 | `sl:<code>` | original URL | ≤ 24h, never past expiry |
 | `rt:<jti>` | user ID | 7 days |
+| `urt:<userID>` | set of the user's refresh token IDs | 7 days |
 | `lockout:<email>` | failed login count | 15 min from first failure |
+| `prt:<sha256>` | user ID (password reset token) | 30 min |
+| `prt-user:<userID>` | hash of the current reset token | 30 min |
+| `prt-cooldown:<email>` | reset mail sent recently | 60 s |
 | `rl:<action>:<ip>` | sorted set of request timestamps | window + 1s |
 
 ### RabbitMQ

@@ -134,8 +134,9 @@ Added to `.env.example` with comments, and to `docs/deploy.md`.
 
 ### 4.4 Storage
 
-`UserRepository` gains `UpdatePasswordHash(ctx, userID, hash) error`
-(`ErrNotFound` if no row changed).
+`UserRepository` gains `UpdatePasswordHash(ctx, userID, hash) error`. It does not
+report `ErrNotFound`: MySQL counts an unchanged row as 0 affected, and the service
+has just loaded the user anyway.
 
 `TokenCache` gains:
 

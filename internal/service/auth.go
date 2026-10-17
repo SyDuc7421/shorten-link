@@ -37,6 +37,7 @@ type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id int64) (*User, error)
+	UpdatePasswordHash(ctx context.Context, userID int64, hash string) error
 }
 
 // TokenCache manages refresh tokens in Redis.
@@ -48,6 +49,16 @@ type TokenCache interface {
 	GetLockout(ctx context.Context, email string) (int64, error)
 	IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error)
 	DeleteLockout(ctx context.Context, email string) error
+	// RevokeAllRefreshTokens deletes every refresh token issued to userID.
+	RevokeAllRefreshTokens(ctx context.Context, userID int64) error
+	// Password reset tokens, stored by the SHA-256 of the token. Storing a new
+	// one for a user invalidates the previous one.
+	StorePasswordReset(ctx context.Context, tokenHash string, userID int64, ttl time.Duration) error
+	// ConsumePasswordReset atomically reads and deletes a reset token.
+	ConsumePasswordReset(ctx context.Context, tokenHash string) (int64, error)
+	DeletePasswordReset(ctx context.Context, userID int64) error
+	// AcquireResetCooldown reports true if no reset mail was sent to email within ttl.
+	AcquireResetCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error)
 }
 
 // TokenPair holds an access + refresh token pair returned on login/register/refresh.

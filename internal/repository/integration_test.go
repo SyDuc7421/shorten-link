@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,5 +404,154 @@ func TestLinkMySQL_ShortCodeIsCaseSensitive(t *testing.T) {
 	}
 	if _, err := repo.GetByCode(ctx, "SALE"); !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("GetByCode(SALE): want ErrNotFound, got %v", err)
+	}
+}
+
+// --- password reset and session index ---
+
+func TestTokenRedis_PasswordReset_SingleUse(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	if err := cache.StorePasswordReset(ctx, "hash-1", 42, time.Minute); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan int64, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if id, err := cache.ConsumePasswordReset(ctx, "hash-1"); err == nil {
+				results <- id
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var got []int64
+	for id := range results {
+		got = append(got, id)
+	}
+	if len(got) != 1 || got[0] != 42 {
+		t.Fatalf("parallel consumes returned %v, want exactly one 42", got)
+	}
+	if _, err := cache.ConsumePasswordReset(ctx, "hash-1"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("third consume: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTokenRedis_PasswordReset_NewTokenInvalidatesOld(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	cache.StorePasswordReset(ctx, "old", 7, time.Minute) //nolint:errcheck
+	if err := cache.StorePasswordReset(ctx, "new", 7, time.Minute); err != nil {
+		t.Fatalf("store new: %v", err)
+	}
+	if _, err := cache.ConsumePasswordReset(ctx, "old"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("old token: want ErrNotFound, got %v", err)
+	}
+	if id, err := cache.ConsumePasswordReset(ctx, "new"); err != nil || id != 7 {
+		t.Errorf("new token: got (%d, %v), want (7, nil)", id, err)
+	}
+}
+
+func TestTokenRedis_DeletePasswordReset(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	cache.StorePasswordReset(ctx, "h", 8, time.Minute) //nolint:errcheck
+	if err := cache.DeletePasswordReset(ctx, 8); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if n := rdb.Exists(ctx, "prt-user:8").Val(); n != 0 {
+		t.Error("prt-user:8 should be deleted")
+	}
+}
+
+func TestTokenRedis_AcquireResetCooldown(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	first, err := cache.AcquireResetCooldown(ctx, "a@x.com", time.Minute)
+	if err != nil || !first {
+		t.Fatalf("first acquire: got (%v, %v), want (true, nil)", first, err)
+	}
+	second, err := cache.AcquireResetCooldown(ctx, "a@x.com", time.Minute)
+	if err != nil || second {
+		t.Errorf("second acquire: got (%v, %v), want (false, nil)", second, err)
+	}
+	other, _ := cache.AcquireResetCooldown(ctx, "b@x.com", time.Minute)
+	if !other {
+		t.Error("cooldown must be per email")
+	}
+}
+
+func TestTokenRedis_RevokeAllRefreshTokens(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	for _, jti := range []string{"j1", "j2", "j3"} {
+		if err := cache.StoreRefreshToken(ctx, jti, 99, time.Hour); err != nil {
+			t.Fatalf("store %s: %v", jti, err)
+		}
+	}
+	cache.StoreRefreshToken(ctx, "other-user", 100, time.Hour) //nolint:errcheck
+
+	if err := cache.RevokeAllRefreshTokens(ctx, 99); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	for _, jti := range []string{"j1", "j2", "j3"} {
+		if _, err := cache.ConsumeRefreshToken(ctx, jti); !errors.Is(err, service.ErrNotFound) {
+			t.Errorf("%s after revoke: want ErrNotFound, got %v", jti, err)
+		}
+	}
+	if _, err := cache.ConsumeRefreshToken(ctx, "other-user"); err != nil {
+		t.Errorf("another user's token must survive: %v", err)
+	}
+	if n := rdb.Exists(ctx, "urt:99").Val(); n != 0 {
+		t.Error("urt:99 should be deleted after revoke")
+	}
+}
+
+func TestTokenRedis_ConsumeRefreshToken_RemovesFromIndex(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	cache.StoreRefreshToken(ctx, "j1", 5, time.Hour) //nolint:errcheck
+	cache.StoreRefreshToken(ctx, "j2", 5, time.Hour) //nolint:errcheck
+	if _, err := cache.ConsumeRefreshToken(ctx, "j1"); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	members := rdb.SMembers(ctx, "urt:5").Val()
+	if len(members) != 1 || members[0] != "j2" {
+		t.Errorf("urt:5 = %v, want [j2]", members)
+	}
+	if ttl := rdb.TTL(ctx, "urt:5").Val(); ttl <= 0 {
+		t.Errorf("urt:5 must expire, TTL = %v", ttl)
+	}
+}
+
+func TestUserMySQL_UpdatePasswordHash(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewUserMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.User{ID: 11, Email: "pw@x.com", PasswordHash: "old", Plan: "free"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := repo.UpdatePasswordHash(ctx, 11, "new-hash"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	u, err := repo.GetByID(ctx, 11)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if u.PasswordHash != "new-hash" {
+		t.Errorf("password_hash = %q, want new-hash", u.PasswordHash)
 	}
 }

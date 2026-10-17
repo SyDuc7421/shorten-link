@@ -50,9 +50,11 @@ translate them:
 
 ## Users in MySQL (`user_mysql.go`)
 
-`Create`, `GetByEmail` and `GetByID`. Emails arrive already normalised
+`Create`, `GetByEmail`, `GetByID` and `UpdatePasswordHash`. Emails arrive already normalised
 (lower-cased) from the service; the unique key on `email` backs up the
-service's "already registered" check.
+service's "already registered" check. `UpdatePasswordHash` does not report a
+missing user: MySQL counts an unchanged row as 0 affected rows, so that number
+cannot tell "no such user" apart from "same hash".
 
 ## Redis (`link_redis.go`, `token_redis.go`)
 
@@ -60,10 +62,27 @@ service's "already registered" check.
 |---|---|---|---|
 | `sl:<code>` | original URL | 24 h, or the link's expiry if sooner | Redirect cache |
 | `rt:<jti>` | user ID | 7 days | Refresh tokens |
+| `urt:<userID>` | set of the user's refresh token IDs | 7 days, extended on every login or refresh | Revoking all sessions at once |
 | `lockout:<email>` | failed login count | 15 min after the first failure | Login lockout |
+| `prt:<sha256>` | user ID | 30 min | Password reset tokens (only the hash is stored) |
+| `prt-user:<userID>` | hash of the user's current reset token | 30 min | Invalidating the previous link when a new one is requested |
+| `prt-cooldown:<email>` | `1` | 60 s | At most one reset mail per minute per address |
 
 - **`ConsumeRefreshToken`** uses `GETDEL`, which reads and deletes in one atomic
   step. Two concurrent refreshes with the same token cannot both succeed.
+- **`StoreRefreshToken`** writes `rt:<jti>` and adds the jti to `urt:<userID>`
+  in one transaction. `ConsumeRefreshToken` removes it from the set again.
+  `RevokeAllRefreshTokens` reads the set and deletes every token in it, which is
+  how a password reset logs the user out everywhere. Entries for tokens that
+  expired on their own can linger in the set until it expires; deleting a key
+  that no longer exists is harmless. Tokens issued before the set existed are
+  not in it and cannot be revoked this way.
+- **`StorePasswordReset`** looks up the user's previous reset token through
+  `prt-user:` and deletes it while storing the new one, so only the latest link
+  works. `ConsumePasswordReset` uses `GETDEL`, so a link works once even if two
+  requests race.
+- **`AcquireResetCooldown`** is `SET ... NX EX`: it succeeds only if no reset
+  mail went to that address within the last minute.
 - **`IncrLockout`** sets the expiry only on the first increment, so the
   15-minute window starts at the first failure and is not extended by later
   ones.

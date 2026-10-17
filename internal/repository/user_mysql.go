@@ -91,3 +91,11 @@ func (r *userMySQL) GetByID(ctx context.Context, id int64) (*service.User, error
 		QuotaDaily:   row.QuotaDaily,
 	}, nil
 }
+
+func (r *userMySQL) UpdatePasswordHash(ctx context.Context, userID int64, hash string) error {
+	const q = `UPDATE users SET password_hash = ? WHERE id = ?`
+	if _, err := r.db.ExecContext(ctx, q, hash, userID); err != nil {
+		return fmt.Errorf("repository: update password hash: %w", err)
+	}
+	return nil
+}

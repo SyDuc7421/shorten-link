@@ -15,7 +15,7 @@ import (
 // --- mock user repository ---
 
 type mockUserRepo struct {
-	users  map[string]*service.User
+	users     map[string]*service.User
 	createErr error
 }
 
@@ -47,14 +47,67 @@ func (m *mockUserRepo) GetByID(_ context.Context, id int64) (*service.User, erro
 	return nil, service.ErrNotFound
 }
 
+func (m *mockUserRepo) UpdatePasswordHash(_ context.Context, id int64, hash string) error {
+	for _, u := range m.users {
+		if u.ID == id {
+			u.PasswordHash = hash
+			return nil
+		}
+	}
+	return service.ErrNotFound
+}
+
 // --- mock token cache ---
 
 type mockTokenCache struct {
-	tokens map[string]int64
+	tokens     map[string]int64
+	resets     map[string]int64 // token hash -> user ID
+	cooldowns  map[string]bool
+	revokedFor []int64
+
+	resetPointerDeletedFor []int64
 }
 
 func newMockTokenCache() *mockTokenCache {
-	return &mockTokenCache{tokens: make(map[string]int64)}
+	return &mockTokenCache{tokens: make(map[string]int64), resets: make(map[string]int64), cooldowns: make(map[string]bool)}
+}
+
+func (m *mockTokenCache) RevokeAllRefreshTokens(_ context.Context, userID int64) error {
+	m.revokedFor = append(m.revokedFor, userID)
+	return nil
+}
+
+func (m *mockTokenCache) StorePasswordReset(_ context.Context, hash string, userID int64, _ time.Duration) error {
+	for h, id := range m.resets {
+		if id == userID {
+			delete(m.resets, h)
+		}
+	}
+	m.resets[hash] = userID
+	return nil
+}
+
+func (m *mockTokenCache) ConsumePasswordReset(_ context.Context, hash string) (int64, error) {
+	id, ok := m.resets[hash]
+	if !ok {
+		return 0, service.ErrNotFound
+	}
+	delete(m.resets, hash)
+	return id, nil
+}
+
+// DeletePasswordReset drops only the user -> token pointer, like the Redis version.
+func (m *mockTokenCache) DeletePasswordReset(_ context.Context, userID int64) error {
+	m.resetPointerDeletedFor = append(m.resetPointerDeletedFor, userID)
+	return nil
+}
+
+func (m *mockTokenCache) AcquireResetCooldown(_ context.Context, email string, _ time.Duration) (bool, error) {
+	if m.cooldowns[email] {
+		return false, nil
+	}
+	m.cooldowns[email] = true
+	return true, nil
 }
 
 func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID int64, _ time.Duration) error {

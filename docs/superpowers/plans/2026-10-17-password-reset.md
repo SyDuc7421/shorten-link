@@ -41,7 +41,7 @@
 **Interfaces produced:**
 ```go
 // UserRepository
-UpdatePasswordHash(ctx context.Context, userID int64, hash string) error // ErrNotFound if no row
+UpdatePasswordHash(ctx context.Context, userID int64, hash string) error
 // TokenCache
 StorePasswordReset(ctx context.Context, tokenHash string, userID int64, ttl time.Duration) error
 ConsumePasswordReset(ctx context.Context, tokenHash string) (int64, error) // ErrNotFound if missing
@@ -51,7 +51,7 @@ RevokeAllRefreshTokens(ctx context.Context, userID int64) error
 ```
 `StoreRefreshToken` also adds the jti to `urt:<userID>`; `ConsumeRefreshToken` removes it.
 
-- [ ] Integration tests (fail first): reset token single use and parallel consume (only one of two goroutines gets the ID); second `StorePasswordReset` invalidates the first; cooldown true then false; revoke-all makes `ConsumeRefreshToken` return `ErrNotFound` for every earlier token; consume removes the jti from `urt:`; `UpdatePasswordHash` changes the row and returns `ErrNotFound` for an unknown ID.
+- [ ] Integration tests (fail first): reset token single use and parallel consume (only one of two goroutines gets the ID); second `StorePasswordReset` invalidates the first; cooldown true then false; revoke-all makes `ConsumeRefreshToken` return `ErrNotFound` for every earlier token; consume removes the jti from `urt:`; `UpdatePasswordHash` changes the row. (No `ErrNotFound`: MySQL reports 0 affected rows when the value is unchanged, and the service has just loaded the user.)
 - [ ] Implement, run `go test ./internal/repository/`, update docs, commit.
 
 ### Task 2: `internal/mail`

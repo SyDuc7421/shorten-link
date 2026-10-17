@@ -68,7 +68,7 @@ WAF, captcha, payments.
 | FR-O1 | `GET /healthz` reports MySQL, Redis, RabbitMQ status; 503 if any is down | ✅ |
 | FR-O2 | Separate liveness (process up) and readiness (dependencies up) probes | ❌ one endpoint does both |
 | FR-O3 | `GET /metrics` in Prometheus format, internal only | ❌ nginx already blocks the path; app does not serve it |
-| FR-O4 | API documented in OpenAPI and browsable at `/docs` | ⚠️ `/docs` works; spec lacks the `/api/auth/*` endpoints and new 400/409/413 responses |
+| FR-O4 | API documented in OpenAPI and browsable at `/docs` | ✅ |
 
 ---
 

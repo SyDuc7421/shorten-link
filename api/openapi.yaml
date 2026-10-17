@@ -16,12 +16,25 @@ paths:
 
   /healthz:
     get:
-      summary: Liveness check
+      summary: Health check
+      description: Reports the status of MySQL, Redis and RabbitMQ.
       security: []
       tags: [System]
       responses:
         "200":
-          description: Service is alive
+          description: All dependencies are up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example: { mysql: "ok", redis: "ok", rabbitmq: "ok" }
+        "503":
+          description: At least one dependency is down
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+              example: { mysql: "ok", redis: "down", rabbitmq: "ok" }
 
   /{code}:
     get:
@@ -29,7 +42,8 @@ paths:
       description: |
         Public endpoint — no authentication required.
         Resolves the short code and issues a 302 redirect.
-        Click events are recorded asynchronously.
+        Click events are recorded asynchronously. Expired and deleted links
+        return 404. Limited to 60 requests per minute per IP.
       security: []
       tags: [Links]
       parameters:
@@ -45,6 +59,139 @@ paths:
               example: https://www.example.com/some/long/path
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/register:
+    post:
+      summary: Register a new user
+      description: |
+        Creates an account and returns a token pair. Email is case-insensitive
+        (`A@x.com` = `a@x.com`). Limited to 5 requests per hour per IP.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          description: Missing email/password, or password not 8–72 bytes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "password must be 8-72 characters"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "email already registered"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/login:
+    post:
+      summary: Log in
+      description: |
+        Returns a new token pair. After 5 failed attempts the email is locked
+        for 15 minutes, even for the correct password. Limited to 10 requests
+        per minute per IP.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Wrong email or password (the response does not say which)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "invalid email or password"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "429":
+          description: |
+            Per-IP rate limit (`rate limit exceeded`, with `Retry-After`) or
+            the email is locked after too many failed attempts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "account temporarily locked due to too many failed attempts"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/auth/refresh:
+    post:
+      summary: Exchange a refresh token for a new token pair
+      description: |
+        Each refresh token works exactly once; the response contains a new one.
+        Limited to 30 requests per minute per IP.
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Refresh token invalid, expired or already used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "invalid or expired refresh token"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -72,13 +219,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/ShortenResponse"
               example:
-                short_url: "http://localhost:8080/aB3xY9z"
-                code: "aB3xY9z"
+                short_url: "http://localhost:8080/aB3xY9zQ1k"
+                code: "aB3xY9zQ1k"
                 expires_at: "2026-12-31T23:59:59Z"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          description: The URL targets a private, loopback or otherwise internal address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "URL targets a forbidden address"
         "409":
           description: The alias is already used by another link
           content:
@@ -177,7 +334,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: RS256 JWT — access token (15 min TTL). Obtain via POST /api/auth/login (Phase 5).
+      description: RS256 JWT access token (15 min TTL) from `/api/auth/login`, `/api/auth/register` or `/api/auth/refresh`.
 
   parameters:
     code:
@@ -188,7 +345,7 @@ components:
       schema:
         type: string
         pattern: "^[0-9A-Za-z_-]{3,16}$"
-      example: aB3xY9z
+      example: aB3xY9zQ1k
 
   schemas:
 
@@ -223,11 +380,11 @@ components:
           type: string
           format: uri
           description: Fully-qualified short URL ready to share.
-          example: "http://localhost:8080/aB3xY9z"
+          example: "http://localhost:8080/aB3xY9zQ1k"
         code:
           type: string
           description: The short code portion of the URL.
-          example: "aB3xY9z"
+          example: "aB3xY9zQ1k"
         expires_at:
           type: string
           format: date-time
@@ -238,16 +395,17 @@ components:
       type: object
       properties:
         id:
-          type: string
-          description: Snowflake ID (returned as string to avoid JS integer overflow).
-          example: "1234567890123456789"
+          type: integer
+          format: int64
+          description: Snowflake ID. Exceeds 2^53, so parse it with a big-integer-safe JSON reader in JavaScript.
+          example: 1234567890123456789
         short_url:
           type: string
           format: uri
-          example: "http://localhost:8080/aB3xY9z"
+          example: "http://localhost:8080/aB3xY9zQ1k"
         code:
           type: string
-          example: "aB3xY9z"
+          example: "aB3xY9zQ1k"
         original_url:
           type: string
           format: uri
@@ -266,6 +424,44 @@ components:
           type: string
           format: date-time
           example: "2026-04-09T10:00:00Z"
+
+    Credentials:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          example: "user@example.com"
+        password:
+          type: string
+          minLength: 8
+          maxLength: 72
+          description: 8–72 bytes.
+          example: "correct-horse-battery"
+
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+          description: "RS256 JWT, valid 15 minutes. Send as `Authorization: Bearer <token>`."
+        refresh_token:
+          type: string
+          description: RS256 JWT, valid 7 days, single use.
+
+    Health:
+      type: object
+      properties:
+        mysql:
+          type: string
+          enum: [ok, down]
+        redis:
+          type: string
+          enum: [ok, down]
+        rabbitmq:
+          type: string
+          enum: [ok, down]
 
     ListResponse:
       type: object
@@ -309,7 +505,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
           example:
-            error: "URL must use http or https"
+            error: "invalid request body"
 
     Unauthorized:
       description: Missing or invalid JWT
@@ -343,6 +539,15 @@ components:
             $ref: "#/components/schemas/Error"
           example:
             error: "rate limit exceeded"
+
+    PayloadTooLarge:
+      description: Request body larger than 1 MB
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "request body too large"
 
     InternalError:
       description: Internal server error

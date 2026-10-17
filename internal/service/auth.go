@@ -37,17 +37,42 @@ type UserRepository interface {
 	Create(ctx context.Context, user *User) error
 	GetByEmail(ctx context.Context, email string) (*User, error)
 	GetByID(ctx context.Context, id int64) (*User, error)
+	UpdatePasswordHash(ctx context.Context, userID int64, hash string) error
 }
 
 // TokenCache manages refresh tokens in Redis.
 type TokenCache interface {
-	StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration) error
+	// StoreRefreshToken stores a refresh token. authorizedAt is when the
+	// credential that justified it (password or previous refresh token) was
+	// checked; if the user's sessions were revoked at or after that moment the
+	// token is not stored and ErrInvalidToken is returned.
+	StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration, authorizedAt time.Time) error
 	// ConsumeRefreshToken atomically reads and deletes a refresh token.
 	ConsumeRefreshToken(ctx context.Context, tokenID string) (int64, error)
 	// Lockout methods used by AuthService.
 	GetLockout(ctx context.Context, email string) (int64, error)
 	IncrLockout(ctx context.Context, email string, ttl time.Duration) (int64, error)
 	DeleteLockout(ctx context.Context, email string) error
+	// RevokeAllRefreshTokens deletes every refresh token issued to userID and
+	// blocks tokens authorised at or before revokedAt from being stored later.
+	// ttl must be at least the refresh token lifetime.
+	RevokeAllRefreshTokens(ctx context.Context, userID int64, revokedAt time.Time, ttl time.Duration) error
+	// Password reset tokens, stored by the SHA-256 of the token. Storing a new
+	// one for a user invalidates the previous one.
+	StorePasswordReset(ctx context.Context, tokenHash string, userID int64, ttl time.Duration) error
+	// ConsumePasswordReset atomically reads and deletes a reset token.
+	ConsumePasswordReset(ctx context.Context, tokenHash string) (int64, error)
+	DeletePasswordReset(ctx context.Context, userID int64) error
+	// AcquireResetSlot reports true if a reset mail may be sent to email now:
+	// none in the last cooldown, and fewer than max in the last window.
+	AcquireResetSlot(ctx context.Context, email string, cooldown, window time.Duration, max int) (bool, error)
+	// ReleaseResetSlot gives back a slot whose mail was never sent.
+	ReleaseResetSlot(ctx context.Context, email string) error
+}
+
+// Mailer sends account emails, defined at the consumer site. Implemented by internal/mail.
+type Mailer interface {
+	SendPasswordReset(ctx context.Context, to, link string) error
 }
 
 // TokenPair holds an access + refresh token pair returned on login/register/refresh.

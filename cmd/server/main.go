@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/handler"
 	"github.com/april/shorten-link/internal/logger"
+	"github.com/april/shorten-link/internal/mail"
 	"github.com/april/shorten-link/internal/messaging"
 	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/repository"
@@ -78,7 +81,15 @@ func main() {
 
 	// services
 	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
-	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey)
+	resetURL, err := service.ParseResetURL(cfg.PasswordResetURL)
+	if err != nil {
+		log.Fatal("invalid config", zap.Error(err))
+	}
+	mailer, err := newMailer(cfg, resetURL, log)
+	if err != nil {
+		log.Fatal("invalid config", zap.Error(err))
+	}
+	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mailer, resetURL)
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
@@ -149,6 +160,9 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 	loginRL := middleware.RateLimit(rdb, "login", 10, time.Minute)(mux)
 	registerRL := middleware.RateLimit(rdb, "register", 5, time.Hour)(mux)
 	refreshRL := middleware.RateLimit(rdb, "refresh", 30, time.Minute)(mux)
+	// each accepted request can send a mail
+	forgotRL := middleware.RateLimit(rdb, "forgot-password", 5, time.Hour)(mux)
+	resetRL := middleware.RateLimit(rdb, "reset-password", 10, time.Minute)(mux)
 	// called while the user types an alias; also stops bulk probing of codes
 	aliasCheckRL := middleware.RateLimit(rdb, "alias-check", 60, time.Minute)(mux)
 
@@ -164,12 +178,45 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 			registerRL.ServeHTTP(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/refresh":
 			refreshRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/forgot-password":
+			forgotRL.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/reset-password":
+			resetRL.ServeHTTP(w, r)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/links/availability":
 			aliasCheckRL.ServeHTTP(w, r)
 		default:
 			mux.ServeHTTP(w, r)
 		}
 	})
+}
+
+// newMailer sends through SMTP when SMTP_HOST is set. Without it, reset links
+// are only logged, which is allowed only while the GUI is on this machine:
+// anywhere else it would put working reset links into production logs and
+// users would never get the mail.
+func newMailer(cfg *config.Config, resetURL *url.URL, log *zap.Logger) (service.Mailer, error) {
+	if cfg.SMTPHost == "" {
+		if !isLocalHost(resetURL.Hostname()) {
+			return nil, fmt.Errorf("SMTP_HOST is required when PASSWORD_RESET_URL (%s) is not on localhost", resetURL)
+		}
+		log.Warn("SMTP_HOST not set: password reset links are logged, not mailed")
+		return mail.NewLogMailer(log), nil
+	}
+	return mail.NewSMTPMailer(mail.SMTPConfig{
+		Host:     cfg.SMTPHost,
+		Port:     cfg.SMTPPort,
+		Username: cfg.SMTPUsername,
+		Password: cfg.SMTPPassword,
+		From:     cfg.SMTPFrom,
+	}, log), nil
+}
+
+func isLocalHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func newServer(port int, h http.Handler) *http.Server {

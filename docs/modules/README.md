@@ -27,9 +27,10 @@ If you read everything, this order follows a request from the outside in:
 | 6 | `deploy/migrations` | [database.md](database.md) | The schema, and how to change it |
 | 7 | `internal/messaging` | [messaging.md](messaging.md) | RabbitMQ: publishing click events and consuming them in batches |
 | 8 | `cmd/worker` | [worker.md](worker.md) | The second program, which counts clicks |
-| 9 | `config` | [config.md](config.md) | Environment variables, connections to MySQL/Redis/RabbitMQ, RSA keys |
-| 10 | `pkg/idgen` | [idgen.md](idgen.md) | Snowflake IDs and the Base62 short codes made from them |
-| 11 | `internal/ctxkey`, `internal/logger`, `api` | [support.md](support.md) | Small helper packages |
+| 9 | `internal/mail` | [mail.md](mail.md) | Sends the password reset email (SMTP, or the log when SMTP is not configured) |
+| 10 | `config` | [config.md](config.md) | Environment variables, connections to MySQL/Redis/RabbitMQ, RSA keys |
+| 11 | `pkg/idgen` | [idgen.md](idgen.md) | Snowflake IDs and the Base62 short codes made from them |
+| 12 | `internal/ctxkey`, `internal/logger`, `api` | [support.md](support.md) | Small helper packages |
 
 ## The one rule that explains the layout
 

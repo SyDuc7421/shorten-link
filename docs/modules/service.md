@@ -13,7 +13,8 @@ interfaces it declares itself, in `link.go` and `auth.go`:
 | `LinkCache` | `repository.linkRedis` | Cache code → URL for fast redirects |
 | `Publisher` | `messaging.Publisher` (or `NoopPublisher`) | Send events such as clicks |
 | `UserRepository` | `repository.userMySQL` | Store and read users |
-| `TokenCache` | `repository.tokenRedis` | Refresh tokens and login-failure counters |
+| `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
+| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
 
 Because the interfaces live here, service tests use small in-file mocks and
 run without any database.
@@ -137,9 +138,68 @@ Redis with an atomic get-and-delete, and issues a brand-new pair. A refresh
 token therefore works exactly once, even if two requests race with it. A reused
 token is answered with `ErrInvalidToken`, and the user has to log in again.
 
+Every refresh token is also recorded in a per-user index, so
+`RevokeAllRefreshTokens` can end all of a user's sessions at once. A password
+reset uses it.
+
+**Revoking safely while requests are in flight.** `Login` and `Refresh` note
+the time *before* they check the password or consume the old token
+(`authorizedAt`) and pass it when storing the new refresh token. A revoke
+records its own time, and the store is refused if the revoke happened at or
+after `authorizedAt`. So a session authorised by the old password or an old
+refresh token can never be created after the reset that was meant to end it.
+`Login` reports that case as `ErrInvalidCredentials`, `Refresh` as
+`ErrInvalidToken`.
+
 `ParseAccessToken` is what `middleware.JWTAuth` calls. It accepts only RSA
 signatures, which blocks the classic "change the algorithm to `none`/HMAC"
 attack.
+
+### Password reset
+
+Two steps, matching the two endpoints.
+
+**`RequestPasswordReset(ctx, email)`** returns nothing. It normalises the email
+and hands **all** the work to a background goroutine (`runAsync`, 10 s
+timeout), so the call takes the same time and has the same outcome for every
+address. Doing the lookup or the Redis calls inside the request would make
+registered emails measurably slower, and a storage error would turn into a
+different status code. Background failures are logged with the request's
+logger (`logger.FromContext`), so they carry the request ID.
+
+In the background:
+
+1. Look the user up. Unknown email: stop.
+2. Take a **send slot** for the address (one Lua script): refused if a mail
+   went out in the last minute, or if 5 already went out in the last 24 hours.
+   The per-IP rate limit alone would let someone with many IPs flood a
+   victim's inbox; the daily cap does not care how many IPs they have.
+3. Generate 32 random bytes (base64url, no padding) and store only their
+   SHA-256, for 30 minutes. Storing a new token invalidates the user's previous
+   one, so only the latest link works. If storing fails, the slot is given
+   back, so the user's retry is not silently swallowed by the cooldown.
+4. Build the link (`resetURL` + `?token=`) and mail it.
+
+**`ResetPassword(ctx, token, password)`**:
+
+1. Check the password length **first**, so a weak password does not use up the
+   link. The user fixes it and submits again.
+2. Consume the token by its hash (atomic, single use). Unknown, expired or used:
+   `ErrInvalidToken`.
+3. Load the user and bcrypt the new password.
+4. **Revoke all sessions**, then update the password hash, then **revoke again**
+   (retried up to 3 times). The first revoke means that if anything later
+   fails, the existing sessions are already gone. The second catches a login
+   with the old password or a refresh that was in flight during the change.
+5. Clear the lockout counter and the reset pointer.
+
+If the first revoke fails, the password is left unchanged and the call fails.
+In every failure case the token is already consumed and the user requests a new
+link. Putting it back would let a failing request be retried forever.
+
+Two limits worth knowing: an access token issued before the reset stays valid
+until it expires (at most 15 minutes), and refresh tokens issued before the
+per-user index existed are not revoked.
 
 ## Before you change it
 
@@ -150,9 +210,12 @@ attack.
   wrapped, and map it in the handler.
 - `TestShorten_OK` and the SSRF tests resolve real hostnames such as
   `example.com`, so they need network access.
-- Not built yet: logout, password reset, email verification and revoking all
-  sessions (FR-A8 to FR-A11 in [spec.md](../spec.md)). Refresh tokens are keyed
-  by token, not by user, so "log out everywhere" needs a new index first.
+- Not built yet: logout and email verification (FR-A8, FR-A10 in
+  [spec.md](../spec.md)). Revoking all sessions exists (`RevokeAllRefreshTokens`)
+  but only a password reset triggers it; there is no endpoint for it yet.
+- The password reset tests use `mockMailer`, which records mails on a channel
+  because they are sent from a goroutine. `next` waits for one; `none` checks
+  that nothing arrives within 100 ms.
 - Lockout has two known gaps. The check and the increment are separate steps,
   so parallel login attempts that all pass the check before any increment can
   try more than 5 passwords. And `INCR` and `EXPIRE` are separate Redis calls,

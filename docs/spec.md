@@ -33,9 +33,9 @@ WAF, captcha, payments.
 | FR-A6 | Responses and timing do not reveal whether an email is registered (login) | ✅ |
 | FR-A7 | A refresh token can be used exactly once, even under concurrent requests | ✅ Redis `GETDEL` |
 | FR-A8 | Logout revokes the current refresh token | ❌ no endpoint |
-| FR-A9 | User can reset a forgotten password | ❌ |
+| FR-A9 | User can reset a forgotten password | ✅ emailed single-use link, 30 min; ends all sessions |
 | FR-A10 | Email ownership is verified before links can be created | ❌ |
-| FR-A11 | Revoke all sessions of a user (password change, compromise) | ❌ refresh tokens are not indexed by user |
+| FR-A11 | Revoke all sessions of a user (password change, compromise) | ⚠️ done on password reset (`urt:<userID>` index); no endpoint of its own; tokens issued before the index existed are not covered |
 
 ### 2.2 Links
 
@@ -186,7 +186,7 @@ Ordered by risk if you launch without it.
 
 9. Metrics + dashboards + alerts on 5xx rate, DLQ depth, dependency health (FR-O3, NFR-OB2, OB3).
 10. Split `/livez` and `/readyz` (FR-O2).
-11. Logout, password reset, email verification, revoke-all-sessions (FR-A8–A11).
+11. Logout, email verification, a revoke-all-sessions endpoint (FR-A8, A10, A11).
 12. Atomic lockout increment (Lua or `SET NX EX` + `INCR`) (NFR-R7).
 
 **Later**

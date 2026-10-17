@@ -164,6 +164,8 @@ Every request passes through these, outermost first:
 | POST | `/api/auth/register` | — | Create account, returns tokens |
 | POST | `/api/auth/login` | — | Log in, returns tokens |
 | POST | `/api/auth/refresh` | — | Swap a refresh token for a new pair |
+| POST | `/api/auth/forgot-password` | — | Email a password reset link (always 202) |
+| POST | `/api/auth/reset-password` | — | Set a new password with the link's token; ends all sessions |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 
@@ -182,6 +184,7 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `internal/service` | Business logic and the interfaces it depends on | `link_service.go`, `auth_service.go` |
 | `internal/repository` | MySQL (`*_mysql.go`) and Redis (`*_redis.go`) implementations | `link_mysql.go` |
 | `internal/messaging` | RabbitMQ topology, publisher, click and DLQ consumers | `setup.go` |
+| `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
 | `internal/ctxkey` | Typed context key for the authenticated user ID | — |
 | `internal/logger` | zap logger, stored in and read from the request context | — |
@@ -244,7 +247,13 @@ to 3 attempts.
 |---|---|---|
 | `sl:<code>` | original URL | ≤ 24h, never past expiry |
 | `rt:<jti>` | user ID | 7 days |
+| `urt:<userID>` | set of the user's refresh token IDs | 7 days |
+| `urv:<userID>` | time of the user's last "revoke all sessions" | 7 days |
 | `lockout:<email>` | failed login count | 15 min from first failure |
+| `prt:<sha256>` | user ID (password reset token) | 30 min |
+| `prt-user:<userID>` | hash of the current reset token | 30 min |
+| `prt-cooldown:<email>` | reset mail sent recently | 60 s |
+| `prt-daily:<email>` | reset mails sent today | 24 h |
 | `rl:<action>:<ip>` | sorted set of request timestamps | window + 1s |
 
 ### RabbitMQ

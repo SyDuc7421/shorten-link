@@ -21,6 +21,10 @@ Edit `.env`:
 | `MYSQL_ROOT_PASSWORD`, `MYSQL_PASSWORD` | Long random values. **Avoid** `@ : / ? # %` in `MYSQL_PASSWORD` (the migrate URL does not escape them) |
 | `REDIS_PASSWORD`, `RABBITMQ_PASSWORD` | Long random values |
 | `NODE_ID` | `1` (must differ per server instance if you ever run more than one) |
+| `PASSWORD_RESET_URL` | `https://<your GUI>/reset-password` (the page the reset email links to) |
+| `SMTP_HOST`, `SMTP_PORT` | Your provider's SMTP relay, usually port `587` (STARTTLS). Required in production: with it empty the server refuses to start unless `PASSWORD_RESET_URL` is on localhost |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | SMTP credentials from the provider |
+| `SMTP_FROM` | A sender address your provider allows, e.g. `no-reply@<DOMAIN>`. Set up SPF/DKIM for that domain or mail lands in spam |
 
 `MYSQL_HOST`, `REDIS_ADDR`, `RABBITMQ_URL` and the `JWT_*` paths are
 overridden by the compose file. You don't need to change them.

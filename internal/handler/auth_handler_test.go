@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,15 @@ type mockAuthSvc struct {
 	registerFn func(ctx context.Context, email, password string) (*service.TokenPair, error)
 	loginFn    func(ctx context.Context, email, password string) (*service.TokenPair, error)
 	refreshFn  func(ctx context.Context, token string) (*service.TokenPair, error)
+	forgotFn   func(ctx context.Context, email string)
+	resetFn    func(ctx context.Context, token, password string) error
+}
+
+func (m *mockAuthSvc) RequestPasswordReset(ctx context.Context, email string) {
+	m.forgotFn(ctx, email)
+}
+func (m *mockAuthSvc) ResetPassword(ctx context.Context, token, password string) error {
+	return m.resetFn(ctx, token, password)
 }
 
 func (m *mockAuthSvc) Register(ctx context.Context, email, password string) (*service.TokenPair, error) {
@@ -228,5 +238,60 @@ func TestAuthHandler_Register_BodyTooLarge(t *testing.T) {
 
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("want 413, got %d", w.Code)
+	}
+}
+
+// --- password reset ---
+
+func postJSON(mux http.Handler, path, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", path, bytes.NewBufferString(body)))
+	return w
+}
+
+func TestAuthHandler_ForgotPassword_Accepted(t *testing.T) {
+	var got string
+	mux := newAuthMux(&mockAuthSvc{forgotFn: func(_ context.Context, email string) { got = email }})
+	w := postJSON(mux, "/api/auth/forgot-password", `{"email":"a@x.com"}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", w.Code, w.Body)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("want empty body, got %q", w.Body)
+	}
+	if got != "a@x.com" {
+		t.Errorf("service got email %q", got)
+	}
+}
+
+func TestAuthHandler_ForgotPassword_Errors(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"missing email", `{}`},
+		{"bad json", `{`},
+	} {
+		mux := newAuthMux(&mockAuthSvc{forgotFn: func(context.Context, string) { t.Error("service called for a bad request") }})
+		if w := postJSON(mux, "/api/auth/forgot-password", tc.body); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d", tc.name, w.Code)
+		}
+	}
+}
+
+func TestAuthHandler_ResetPassword(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		svcErr     error
+		want       int
+	}{
+		{"ok", `{"token":"t","password":"new-password"}`, nil, http.StatusNoContent},
+		{"missing token", `{"password":"new-password"}`, nil, http.StatusBadRequest},
+		{"missing password", `{"token":"t"}`, nil, http.StatusBadRequest},
+		{"weak password", `{"token":"t","password":"x"}`, service.ErrWeakPassword, http.StatusBadRequest},
+		{"bad token", `{"token":"t","password":"new-password"}`, service.ErrInvalidToken, http.StatusUnauthorized},
+		{"service failure", `{"token":"t","password":"new-password"}`, errors.New("db down"), http.StatusInternalServerError},
+	} {
+		mux := newAuthMux(&mockAuthSvc{resetFn: func(context.Context, string, string) error { return tc.svcErr }})
+		if w := postJSON(mux, "/api/auth/reset-password", tc.body); w.Code != tc.want {
+			t.Errorf("%s: want %d, got %d: %s", tc.name, tc.want, w.Code, w.Body)
+		}
 	}
 }

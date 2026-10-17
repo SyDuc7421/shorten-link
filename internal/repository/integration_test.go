@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -323,7 +324,7 @@ func TestTokenRedis_ConsumeRefreshToken_OnlyOnce(t *testing.T) {
 	tokens := repository.NewTokenRedis(rdb)
 	ctx := context.Background()
 
-	tokens.StoreRefreshToken(ctx, "tid", 42, time.Minute) //nolint:errcheck
+	tokens.StoreRefreshToken(ctx, "tid", 42, time.Minute, time.Now()) //nolint:errcheck
 	uid, err := tokens.ConsumeRefreshToken(ctx, "tid")
 	if err != nil || uid != 42 {
 		t.Fatalf("first consume: uid=%d err=%v", uid, err)
@@ -403,5 +404,205 @@ func TestLinkMySQL_ShortCodeIsCaseSensitive(t *testing.T) {
 	}
 	if _, err := repo.GetByCode(ctx, "SALE"); !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("GetByCode(SALE): want ErrNotFound, got %v", err)
+	}
+}
+
+// --- password reset and session index ---
+
+func TestTokenRedis_PasswordReset_SingleUse(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	if err := cache.StorePasswordReset(ctx, "hash-1", 42, time.Minute); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	var wg sync.WaitGroup
+	results := make(chan int64, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if id, err := cache.ConsumePasswordReset(ctx, "hash-1"); err == nil {
+				results <- id
+			}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	var got []int64
+	for id := range results {
+		got = append(got, id)
+	}
+	if len(got) != 1 || got[0] != 42 {
+		t.Fatalf("parallel consumes returned %v, want exactly one 42", got)
+	}
+	if _, err := cache.ConsumePasswordReset(ctx, "hash-1"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("third consume: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTokenRedis_PasswordReset_NewTokenInvalidatesOld(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	cache.StorePasswordReset(ctx, "old", 7, time.Minute) //nolint:errcheck
+	if err := cache.StorePasswordReset(ctx, "new", 7, time.Minute); err != nil {
+		t.Fatalf("store new: %v", err)
+	}
+	if _, err := cache.ConsumePasswordReset(ctx, "old"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("old token: want ErrNotFound, got %v", err)
+	}
+	if id, err := cache.ConsumePasswordReset(ctx, "new"); err != nil || id != 7 {
+		t.Errorf("new token: got (%d, %v), want (7, nil)", id, err)
+	}
+}
+
+func TestTokenRedis_DeletePasswordReset(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	cache.StorePasswordReset(ctx, "h", 8, time.Minute) //nolint:errcheck
+	if err := cache.DeletePasswordReset(ctx, 8); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if n := rdb.Exists(ctx, "prt-user:8").Val(); n != 0 {
+		t.Error("prt-user:8 should be deleted")
+	}
+}
+
+func TestTokenRedis_AcquireResetSlot_Cooldown(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	first, err := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5)
+	if err != nil || !first {
+		t.Fatalf("first acquire: got (%v, %v), want (true, nil)", first, err)
+	}
+	second, err := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5)
+	if err != nil || second {
+		t.Errorf("second acquire within the cooldown: got (%v, %v), want (false, nil)", second, err)
+	}
+	if other, _ := cache.AcquireResetSlot(ctx, "b@x.com", time.Minute, 24*time.Hour, 5); !other {
+		t.Error("cooldown must be per email")
+	}
+
+	// A failed attempt gives the slot back, so the user can retry at once.
+	if err := cache.ReleaseResetSlot(ctx, "a@x.com"); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if again, _ := cache.AcquireResetSlot(ctx, "a@x.com", time.Minute, 24*time.Hour, 5); !again {
+		t.Error("acquire after release: want true")
+	}
+}
+
+func TestTokenRedis_AcquireResetSlot_DailyCap(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	for i := 1; i <= 3; i++ {
+		ok, err := cache.AcquireResetSlot(ctx, "v@x.com", time.Millisecond, 24*time.Hour, 3)
+		if err != nil || !ok {
+			t.Fatalf("acquire %d: got (%v, %v), want (true, nil)", i, ok, err)
+		}
+		time.Sleep(5 * time.Millisecond) // let the 1 ms cooldown expire
+	}
+	if ok, _ := cache.AcquireResetSlot(ctx, "v@x.com", time.Millisecond, 24*time.Hour, 3); ok {
+		t.Error("fourth acquire within the window: want false (daily cap)")
+	}
+}
+
+func TestTokenRedis_RevokeAllRefreshTokens(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	for _, jti := range []string{"j1", "j2", "j3"} {
+		if err := cache.StoreRefreshToken(ctx, jti, 99, time.Hour, time.Now()); err != nil {
+			t.Fatalf("store %s: %v", jti, err)
+		}
+	}
+	cache.StoreRefreshToken(ctx, "other-user", 100, time.Hour, time.Now()) //nolint:errcheck
+
+	if err := cache.RevokeAllRefreshTokens(ctx, 99, time.Now(), time.Hour); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	for _, jti := range []string{"j1", "j2", "j3"} {
+		if _, err := cache.ConsumeRefreshToken(ctx, jti); !errors.Is(err, service.ErrNotFound) {
+			t.Errorf("%s after revoke: want ErrNotFound, got %v", jti, err)
+		}
+	}
+	if _, err := cache.ConsumeRefreshToken(ctx, "other-user"); err != nil {
+		t.Errorf("another user's token must survive: %v", err)
+	}
+	if n := rdb.Exists(ctx, "urt:99").Val(); n != 0 {
+		t.Error("urt:99 should be deleted after revoke")
+	}
+}
+
+func TestTokenRedis_ConsumeRefreshToken_RemovesFromIndex(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewTokenRedis(rdb)
+	ctx := context.Background()
+
+	cache.StoreRefreshToken(ctx, "j1", 5, time.Hour, time.Now()) //nolint:errcheck
+	cache.StoreRefreshToken(ctx, "j2", 5, time.Hour, time.Now()) //nolint:errcheck
+	if _, err := cache.ConsumeRefreshToken(ctx, "j1"); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	members := rdb.SMembers(ctx, "urt:5").Val()
+	if len(members) != 1 || members[0] != "j2" {
+		t.Errorf("urt:5 = %v, want [j2]", members)
+	}
+	if ttl := rdb.TTL(ctx, "urt:5").Val(); ttl <= 0 {
+		t.Errorf("urt:5 must expire, TTL = %v", ttl)
+	}
+}
+
+func TestUserMySQL_UpdatePasswordHash(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewUserMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.User{ID: 11, Email: "pw@x.com", PasswordHash: "old", Plan: "free"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := repo.UpdatePasswordHash(ctx, 11, "new-hash"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	u, err := repo.GetByID(ctx, 11)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if u.PasswordHash != "new-hash" {
+		t.Errorf("password_hash = %q, want new-hash", u.PasswordHash)
+	}
+}
+
+func TestTokenRedis_StoreRefreshToken_BlockedAfterRevoke(t *testing.T) {
+	cache := repository.NewTokenRedis(setupRedis(t))
+	ctx := context.Background()
+
+	// A refresh or login that was authorised before the revoke (by an old
+	// refresh token or the old password) must not be able to store a token
+	// after it: that is the race between a refresh and a password reset.
+	authorisedBefore := time.Now()
+	revokedAt := authorisedBefore.Add(10 * time.Millisecond)
+	if err := cache.RevokeAllRefreshTokens(ctx, 31, revokedAt, time.Hour); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	err := cache.StoreRefreshToken(ctx, "late", 31, time.Hour, authorisedBefore)
+	if !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("store authorised before the revoke: want ErrInvalidToken, got %v", err)
+	}
+	if _, err := cache.ConsumeRefreshToken(ctx, "late"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("blocked token must not be stored, consume got %v", err)
+	}
+
+	if err := cache.StoreRefreshToken(ctx, "fresh", 31, time.Hour, revokedAt.Add(time.Millisecond)); err != nil {
+		t.Errorf("store authorised after the revoke: %v", err)
+	}
+	if err := cache.StoreRefreshToken(ctx, "other", 32, time.Hour, authorisedBefore); err != nil {
+		t.Errorf("another user's store must not be affected: %v", err)
 	}
 }

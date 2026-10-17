@@ -50,9 +50,11 @@ translate them:
 
 ## Users in MySQL (`user_mysql.go`)
 
-`Create`, `GetByEmail` and `GetByID`. Emails arrive already normalised
+`Create`, `GetByEmail`, `GetByID` and `UpdatePasswordHash`. Emails arrive already normalised
 (lower-cased) from the service; the unique key on `email` backs up the
-service's "already registered" check.
+service's "already registered" check. `UpdatePasswordHash` does not report a
+missing user: MySQL counts an unchanged row as 0 affected rows, so that number
+cannot tell "no such user" apart from "same hash".
 
 ## Redis (`link_redis.go`, `token_redis.go`)
 
@@ -60,10 +62,41 @@ service's "already registered" check.
 |---|---|---|---|
 | `sl:<code>` | original URL | 24 h, or the link's expiry if sooner | Redirect cache |
 | `rt:<jti>` | user ID | 7 days | Refresh tokens |
+| `urt:<userID>` | set of the user's refresh token IDs | 7 days, extended on every login or refresh | Revoking all sessions at once |
+| `urv:<userID>` | time of the last "revoke all", Unix ms | 7 days | Blocking tokens authorised before that moment |
 | `lockout:<email>` | failed login count | 15 min after the first failure | Login lockout |
+| `prt:<sha256>` | user ID | 30 min | Password reset tokens (only the hash is stored) |
+| `prt-user:<userID>` | hash of the user's current reset token | 30 min | Invalidating the previous link when a new one is requested |
+| `prt-cooldown:<email>` | `1` | 60 s | At most one reset mail per minute per address |
+| `prt-daily:<email>` | reset mails sent | 24 h from the first | At most 5 reset mails a day per address |
 
 - **`ConsumeRefreshToken`** uses `GETDEL`, which reads and deletes in one atomic
   step. Two concurrent refreshes with the same token cannot both succeed.
+- **`StoreRefreshToken`** is a Lua script: it writes `rt:<jti>` and adds the
+  jti to `urt:<userID>`, **unless** `urv:<userID>` holds a revoke time at or
+  after `authorizedAt`, in which case it stores nothing and returns
+  `ErrInvalidToken`. `authorizedAt` is when the password or the previous
+  refresh token was checked. Without this check a refresh could consume its old
+  token, a password reset could revoke everything, and the refresh would then
+  store a fresh token that survives the reset.
+- **`RevokeAllRefreshTokens`** is also a Lua script: it records the revoke time
+  in `urv:`, then deletes every token in the set and the set itself, in one
+  atomic step. It is how a password reset logs the user out everywhere.
+  `ConsumeRefreshToken` removes a jti from the set when it is used. The scripts
+  build token keys from an argument, which works on one Redis instance but not
+  on Redis Cluster. Times come from the app server's clock, so with several
+  servers their clocks must agree to within a few milliseconds. Entries for tokens that
+  expired on their own can linger in the set until it expires; deleting a key
+  that no longer exists is harmless. Tokens issued before the set existed are
+  not in it and cannot be revoked this way.
+- **`StorePasswordReset`** looks up the user's previous reset token through
+  `prt-user:` and deletes it while storing the new one, so only the latest link
+  works. `ConsumePasswordReset` uses `GETDEL`, so a link works once even if two
+  requests race.
+- **`AcquireResetSlot`** is a Lua script: it refuses if the cooldown key
+  exists, otherwise increments the daily counter and refuses past the cap,
+  otherwise sets the cooldown. `ReleaseResetSlot` deletes the cooldown and
+  decrements the counter when the mail was never sent.
 - **`IncrLockout`** sets the expiry only on the first increment, so the
   15-minute window starts at the first failure and is not extended by later
   ones.

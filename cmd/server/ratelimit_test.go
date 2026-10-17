@@ -54,6 +54,8 @@ func TestWithRateLimits(t *testing.T) {
 		{http.MethodPost, "/api/auth/login", 10},
 		{http.MethodPost, "/api/auth/register", 5},
 		{http.MethodPost, "/api/auth/refresh", 30},
+		{http.MethodPost, "/api/auth/forgot-password", 5},
+		{http.MethodPost, "/api/auth/reset-password", 10},
 		{http.MethodPost, "/api/links", 10},
 		{http.MethodGet, "/abc123", 60},
 		{http.MethodGet, "/api/links/availability?alias=abc", 60},

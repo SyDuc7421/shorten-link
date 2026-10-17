@@ -28,15 +28,34 @@ func NewTokenRedis(rdb *redis.Client) service.TokenCache {
 // linger until the set itself expires; they point at keys that no longer exist.
 func userTokensKey(userID int64) string { return "urt:" + strconv.FormatInt(userID, 10) }
 
-func (c *tokenRedis) StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration) error {
-	_, err := c.rdb.TxPipelined(ctx, func(p redis.Pipeliner) error {
-		p.Set(ctx, tokenPrefix+tokenID, userID, ttl)
-		p.SAdd(ctx, userTokensKey(userID), tokenID)
-		p.Expire(ctx, userTokensKey(userID), ttl)
-		return nil
-	})
+// userRevokedKey holds the time (Unix ms) of the user's last "revoke all".
+func userRevokedKey(userID int64) string { return "urv:" + strconv.FormatInt(userID, 10) }
+
+// storeRefreshScript stores a refresh token unless the user's sessions were
+// revoked at or after the moment the request was authorised. Checking and
+// storing in one script closes the race where a refresh consumes its old token,
+// a password reset revokes everything, and the refresh then stores a new token.
+var storeRefreshScript = redis.NewScript(`
+local revoked = redis.call('GET', KEYS[3])
+if revoked and tonumber(revoked) >= tonumber(ARGV[3]) then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+redis.call('SADD', KEYS[2], ARGV[4])
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
+return 1
+`)
+
+func (c *tokenRedis) StoreRefreshToken(ctx context.Context, tokenID string, userID int64, ttl time.Duration, authorizedAt time.Time) error {
+	stored, err := storeRefreshScript.Run(ctx, c.rdb,
+		[]string{tokenPrefix + tokenID, userTokensKey(userID), userRevokedKey(userID)},
+		userID, ttl.Milliseconds(), authorizedAt.UnixMilli(), tokenID,
+	).Int()
 	if err != nil {
 		return fmt.Errorf("token cache: store: %w", err)
+	}
+	if stored == 0 {
+		return service.ErrInvalidToken
 	}
 	return nil
 }
@@ -89,16 +108,26 @@ func (c *tokenRedis) DeleteLockout(ctx context.Context, email string) error {
 	return nil
 }
 
-func (c *tokenRedis) RevokeAllRefreshTokens(ctx context.Context, userID int64) error {
-	ids, err := c.rdb.SMembers(ctx, userTokensKey(userID)).Result()
+// revokeAllScript records the revoke time and deletes every indexed token in
+// one atomic step, so no store can slip in between reading and deleting the set.
+// Token keys are built from ARGV[3], which is fine on a single Redis instance
+// but not on Redis Cluster.
+var revokeAllScript = redis.NewScript(`
+redis.call('SET', KEYS[2], ARGV[1], 'PX', ARGV[2])
+local ids = redis.call('SMEMBERS', KEYS[1])
+for _, id in ipairs(ids) do
+  redis.call('DEL', ARGV[3] .. id)
+end
+redis.call('DEL', KEYS[1])
+return #ids
+`)
+
+func (c *tokenRedis) RevokeAllRefreshTokens(ctx context.Context, userID int64, revokedAt time.Time, ttl time.Duration) error {
+	err := revokeAllScript.Run(ctx, c.rdb,
+		[]string{userTokensKey(userID), userRevokedKey(userID)},
+		revokedAt.UnixMilli(), ttl.Milliseconds(), tokenPrefix,
+	).Err()
 	if err != nil {
-		return fmt.Errorf("token cache: list user tokens: %w", err)
-	}
-	keys := []string{userTokensKey(userID)}
-	for _, id := range ids {
-		keys = append(keys, tokenPrefix+id)
-	}
-	if err := c.rdb.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("token cache: revoke user tokens: %w", err)
 	}
 	return nil

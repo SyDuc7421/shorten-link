@@ -68,16 +68,39 @@ type mockTokenCache struct {
 	resets     map[string]int64 // token hash -> user ID
 	cooldowns  map[string]bool
 	revokedFor []int64
+	revokedAt  map[int64]time.Time
+	revokeErrs []error // returned by successive RevokeAllRefreshTokens calls
+	onConsume  func()  // runs inside ConsumeRefreshToken, to simulate a concurrent request
 
 	resetPointerDeletedFor []int64
 }
 
 func newMockTokenCache() *mockTokenCache {
-	return &mockTokenCache{tokens: make(map[string]int64), resets: make(map[string]int64), cooldowns: make(map[string]bool)}
+	return &mockTokenCache{
+		tokens:    make(map[string]int64),
+		resets:    make(map[string]int64),
+		cooldowns: make(map[string]bool),
+		revokedAt: make(map[int64]time.Time),
+	}
 }
 
-func (m *mockTokenCache) RevokeAllRefreshTokens(_ context.Context, userID int64) error {
+// RevokeAllRefreshTokens mirrors the Redis version: it records a revoke time
+// that blocks tokens authorised before it, and deletes the user's tokens.
+func (m *mockTokenCache) RevokeAllRefreshTokens(_ context.Context, userID int64, at time.Time, _ time.Duration) error {
+	if len(m.revokeErrs) > 0 {
+		err := m.revokeErrs[0]
+		m.revokeErrs = m.revokeErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	m.revokedFor = append(m.revokedFor, userID)
+	m.revokedAt[userID] = at
+	for id, uid := range m.tokens {
+		if uid == userID && !strings.HasPrefix(id, "lockout:") {
+			delete(m.tokens, id)
+		}
+	}
 	return nil
 }
 
@@ -114,13 +137,19 @@ func (m *mockTokenCache) AcquireResetCooldown(_ context.Context, email string, _
 	return true, nil
 }
 
-func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID int64, _ time.Duration) error {
+func (m *mockTokenCache) StoreRefreshToken(_ context.Context, id string, userID int64, _ time.Duration, authorizedAt time.Time) error {
+	if at, ok := m.revokedAt[userID]; ok && !authorizedAt.After(at) {
+		return service.ErrInvalidToken
+	}
 	m.tokens[id] = userID
 	return nil
 }
 
 func (m *mockTokenCache) ConsumeRefreshToken(_ context.Context, id string) (int64, error) {
 	uid, ok := m.tokens[id]
+	if ok && m.onConsume != nil {
+		defer m.onConsume()
+	}
 	if !ok {
 		return 0, service.ErrNotFound
 	}
@@ -513,13 +542,91 @@ func TestResetPassword_OK(t *testing.T) {
 	if _, err := svc.Login(context.Background(), "a@x.com", "old-password"); !errors.Is(err, service.ErrInvalidCredentials) {
 		t.Errorf("login with the old password: want ErrInvalidCredentials, got %v", err)
 	}
-	if len(tokens.revokedFor) != 1 || tokens.revokedFor[0] != userID {
-		t.Errorf("revoked sessions for %v, want [%d]", tokens.revokedFor, userID)
+	if len(tokens.revokedFor) == 0 || tokens.revokedFor[0] != userID {
+		t.Errorf("revoked sessions for %v, want %d", tokens.revokedFor, userID)
 	}
 	if len(tokens.resetPointerDeletedFor) != 1 || tokens.resetPointerDeletedFor[0] != userID {
 		t.Errorf("reset pointer deleted for %v, want [%d]", tokens.resetPointerDeletedFor, userID)
 	}
 	if err := svc.ResetPassword(context.Background(), token, "another-password"); !errors.Is(err, service.ErrInvalidToken) {
 		t.Errorf("second use of the link: want ErrInvalidToken, got %v", err)
+	}
+}
+
+// A refresh that consumed its old token just before a password reset revoked
+// everything must not come out of it with a working token.
+func TestRefresh_RacingPasswordReset(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	resetToken := requestResetToken(t, svc, mailer, "a@x.com")
+	pair, err := svc.Login(context.Background(), "a@x.com", "old-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tokens.onConsume = func() {
+		tokens.onConsume = nil
+		time.Sleep(2 * time.Millisecond)
+		if err := svc.ResetPassword(context.Background(), resetToken, "new-password"); err != nil {
+			t.Errorf("reset: %v", err)
+		}
+	}
+	if _, err := svc.Refresh(context.Background(), pair.RefreshToken); !errors.Is(err, service.ErrInvalidToken) {
+		t.Errorf("refresh racing a reset: want ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestResetPassword_RevokesBeforeAndAfterChangingPassword(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens.revokedFor) != 2 {
+		t.Errorf("revoked %d times, want 2 (before and after the password change)", len(tokens.revokedFor))
+	}
+}
+
+func TestResetPassword_RevokeFailsBeforeChange_KeepsOldPassword(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	tokens.revokeErrs = []error{errors.New("redis timeout")}
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err == nil {
+		t.Fatal("want error when sessions cannot be revoked")
+	}
+	if _, err := svc.Login(context.Background(), "a@x.com", "old-password"); err != nil {
+		t.Errorf("password must be unchanged when the first revoke fails: %v", err)
+	}
+}
+
+func TestResetPassword_RetriesRevokeAfterChange(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	// first revoke ok, the one after the password change fails once
+	tokens.revokeErrs = []error{nil, errors.New("redis timeout")}
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Fatalf("a transient revoke failure after the change should be retried: %v", err)
+	}
+	if len(tokens.revokedFor) != 2 {
+		t.Errorf("successful revokes = %d, want 2", len(tokens.revokedFor))
+	}
+}
+
+func TestLogin_RacingPasswordReset(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	requestResetToken(t, svc, mailer, "a@x.com")
+	// A reset revoked everything just after this login started checking the
+	// old password.
+	tokens.revokedAt[users.users["a@x.com"].ID] = time.Now().Add(time.Second)
+
+	if _, err := svc.Login(context.Background(), "a@x.com", "old-password"); !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Errorf("want ErrInvalidCredentials, got %v", err)
 	}
 }

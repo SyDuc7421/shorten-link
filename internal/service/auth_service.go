@@ -33,6 +33,7 @@ const (
 	resetTokenTTL   = 30 * time.Minute
 	resetCooldown   = time.Minute
 	mailSendTimeout = 10 * time.Second
+	revokeAttempts  = 3
 )
 
 // dummyHash is compared against when the email is unknown so that login
@@ -104,12 +105,15 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*To
 		return nil, fmt.Errorf("service: register create: %w", err)
 	}
 
-	return s.issueTokenPair(ctx, user.ID)
+	return s.issueTokenPair(ctx, user.ID, time.Now())
 }
 
 // Login verifies credentials and returns a token pair.
 // Accounts are locked for lockoutTTL after lockoutMax consecutive failures.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*TokenPair, error) {
+	// Taken before the password check: a reset that lands after this moment
+	// must invalidate a session authorised by the old password.
+	authorizedAt := time.Now()
 	email = normalizeEmail(email)
 
 	failures, err := s.tokens.GetLockout(ctx, email)
@@ -140,7 +144,12 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Token
 	}
 
 	s.tokens.DeleteLockout(ctx, email) //nolint:errcheck
-	return s.issueTokenPair(ctx, user.ID)
+	pair, err := s.issueTokenPair(ctx, user.ID, authorizedAt)
+	if errors.Is(err, ErrInvalidToken) {
+		// the password was reset while this login was checking the old one
+		return nil, ErrInvalidCredentials
+	}
+	return pair, err
 }
 
 // Refresh validates a refresh token, invalidates it, and issues a new pair.
@@ -152,6 +161,10 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 		return nil, ErrInvalidToken
 	}
 
+	// Taken before the consume, so a revoke that runs between the consume and
+	// storing the new token blocks it.
+	authorizedAt := time.Now()
+
 	// consume atomically (rotation) so concurrent reuse can only succeed once
 	userID, err := s.tokens.ConsumeRefreshToken(ctx, tokenID)
 	if errors.Is(err, ErrNotFound) {
@@ -161,7 +174,7 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 		return nil, fmt.Errorf("service: refresh consume: %w", err)
 	}
 
-	return s.issueTokenPair(ctx, userID)
+	return s.issueTokenPair(ctx, userID, authorizedAt)
 }
 
 // RequestPasswordReset mails a single-use reset link if email belongs to a
@@ -229,11 +242,25 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	if err != nil {
 		return fmt.Errorf("service: hash password: %w", err)
 	}
+
+	// Revoke before the change, so that if the change or the second revoke
+	// fails, the existing sessions are already gone. Revoke again after it,
+	// so a login with the old password or a refresh that was in flight during
+	// the change cannot keep a session (see StoreRefreshToken's authorizedAt).
+	if err := s.tokens.RevokeAllRefreshTokens(ctx, userID, time.Now(), refreshTokenTTL); err != nil {
+		return fmt.Errorf("service: revoke sessions: %w", err)
+	}
 	if err := s.users.UpdatePasswordHash(ctx, userID, string(hash)); err != nil {
 		return fmt.Errorf("service: update password: %w", err)
 	}
-	if err := s.tokens.RevokeAllRefreshTokens(ctx, userID); err != nil {
-		return fmt.Errorf("service: revoke sessions: %w", err)
+	var revokeErr error
+	for range revokeAttempts {
+		if revokeErr = s.tokens.RevokeAllRefreshTokens(ctx, userID, time.Now(), refreshTokenTTL); revokeErr == nil {
+			break
+		}
+	}
+	if revokeErr != nil {
+		return fmt.Errorf("service: revoke sessions after password change: %w", revokeErr)
 	}
 
 	s.tokens.DeleteLockout(ctx, user.Email)   //nolint:errcheck
@@ -279,7 +306,8 @@ func (s *AuthService) sendAsync(send func(ctx context.Context)) {
 }
 
 // issueTokenPair creates and stores a new access + refresh token pair.
-func (s *AuthService) issueTokenPair(ctx context.Context, userID int64) (*TokenPair, error) {
+// authorizedAt is when the credential behind this pair was checked.
+func (s *AuthService) issueTokenPair(ctx context.Context, userID int64, authorizedAt time.Time) (*TokenPair, error) {
 	accessToken, err := s.signAccessToken(userID)
 	if err != nil {
 		return nil, fmt.Errorf("service: sign access token: %w", err)
@@ -291,7 +319,12 @@ func (s *AuthService) issueTokenPair(ctx context.Context, userID int64) (*TokenP
 		return nil, fmt.Errorf("service: sign refresh token: %w", err)
 	}
 
-	if err := s.tokens.StoreRefreshToken(ctx, tokenID, userID, refreshTokenTTL); err != nil {
+	err = s.tokens.StoreRefreshToken(ctx, tokenID, userID, refreshTokenTTL, authorizedAt)
+	if errors.Is(err, ErrInvalidToken) {
+		// the user's sessions were revoked while this request was in flight
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
 		return nil, fmt.Errorf("service: store refresh token: %w", err)
 	}
 

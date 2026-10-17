@@ -142,6 +142,15 @@ Every refresh token is also recorded in a per-user index, so
 `RevokeAllRefreshTokens` can end all of a user's sessions at once. A password
 reset uses it.
 
+**Revoking safely while requests are in flight.** `Login` and `Refresh` note
+the time *before* they check the password or consume the old token
+(`authorizedAt`) and pass it when storing the new refresh token. A revoke
+records its own time, and the store is refused if the revoke happened at or
+after `authorizedAt`. So a session authorised by the old password or an old
+refresh token can never be created after the reset that was meant to end it.
+`Login` reports that case as `ErrInvalidCredentials`, `Refresh` as
+`ErrInvalidToken`.
+
 `ParseAccessToken` is what `middleware.JWTAuth` calls. It accepts only RSA
 signatures, which blocks the classic "change the algorithm to `none`/HMAC"
 attack.
@@ -169,12 +178,16 @@ fails, whether or not the email exists, so the API answers the same either way.
    link. The user fixes it and submits again.
 2. Consume the token by its hash (atomic, single use). Unknown, expired or used:
    `ErrInvalidToken`.
-3. Load the user, bcrypt the new password, update the hash.
-4. Revoke every refresh token of the user, then clear the lockout counter and
-   the reset pointer.
+3. Load the user and bcrypt the new password.
+4. **Revoke all sessions**, then update the password hash, then **revoke again**
+   (retried up to 3 times). The first revoke means that if anything later
+   fails, the existing sessions are already gone. The second catches a login
+   with the old password or a refresh that was in flight during the change.
+5. Clear the lockout counter and the reset pointer.
 
-If step 3 or 4 fails, the token is already consumed and the user has to request
-a new link. Putting it back would let a failing request be retried forever.
+If the first revoke fails, the password is left unchanged and the call fails.
+In every failure case the token is already consumed and the user requests a new
+link. Putting it back would let a failing request be retried forever.
 
 Two limits worth knowing: an access token issued before the reset stays valid
 until it expires (at most 15 minutes), and refresh tokens issued before the

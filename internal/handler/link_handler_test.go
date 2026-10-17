@@ -453,3 +453,18 @@ func TestLinkHandler_Shorten_QuotaExceededRetryAfterMidnightUTC(t *testing.T) {
 		t.Errorf("want Retry-After about %d, got %q", want, w.Header().Get("Retry-After"))
 	}
 }
+
+func TestLinkHandler_Redirect_Disabled(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		resolveFn: func(_ context.Context, _ string) (string, error) {
+			return "", fmt.Errorf("service: resolve: %w", service.ErrLinkDisabled)
+		},
+	})
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/abc", nil))
+
+	if w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "link disabled") {
+		t.Errorf("want 410 link disabled, got %d %s", w.Code, w.Body.String())
+	}
+}

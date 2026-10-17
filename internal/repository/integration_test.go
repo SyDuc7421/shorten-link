@@ -697,3 +697,48 @@ func TestOpenMySQL_SessionTimeZoneIsUTC(t *testing.T) {
 		t.Errorf("want session time zone +00:00, got %q", tz)
 	}
 }
+
+func TestLinkMySQL_GetByCode_DisabledFlags(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (1, 'a@b.com', 'x')`) //nolint:errcheck
+	if err := repo.Create(ctx, &service.Link{ID: 10, UserID: 1, ShortCode: "abc", OriginalURL: "https://e.com"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := repo.GetByCode(ctx, "abc")
+	if err != nil || l.DisabledAt != nil || l.OwnerDisabled {
+		t.Fatalf("want enabled link and owner, got %+v, %v", l, err)
+	}
+
+	db.ExecContext(ctx, `UPDATE links SET disabled_at = UTC_TIMESTAMP() WHERE id = 10`) //nolint:errcheck
+	db.ExecContext(ctx, `UPDATE users SET disabled_at = UTC_TIMESTAMP() WHERE id = 1`)  //nolint:errcheck
+	l, err = repo.GetByCode(ctx, "abc")
+	if err != nil || l.DisabledAt == nil || !l.OwnerDisabled {
+		t.Fatalf("want both flags set, got %+v, %v", l, err)
+	}
+}
+
+func TestLinkRedis_DeleteMany(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewLinkRedis(rdb)
+	ctx := context.Background()
+
+	codes := make([]string, 1200)
+	for i := range codes {
+		codes[i] = fmt.Sprintf("c%d", i)
+		if err := cache.Set(ctx, codes[i], "https://e.com", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cache.DeleteMany(ctx, codes); err != nil {
+		t.Fatal(err)
+	}
+	if n := rdb.DBSize(ctx).Val(); n != 0 {
+		t.Errorf("want empty cache, %d keys left", n)
+	}
+	if err := cache.DeleteMany(ctx, nil); err != nil {
+		t.Errorf("empty list: %v", err)
+	}
+}

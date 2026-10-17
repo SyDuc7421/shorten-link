@@ -59,6 +59,14 @@ paths:
               example: https://www.example.com/some/long/path
         "404":
           $ref: "#/components/responses/NotFound"
+        "410":
+          description: An admin disabled the link, or the account that owns it
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "link disabled"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":

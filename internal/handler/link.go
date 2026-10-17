@@ -156,6 +156,10 @@ func (h *LinkHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 
 	rawURL, err := h.svc.Resolve(r.Context(), code)
 	if err != nil {
+		if errors.Is(err, service.ErrLinkDisabled) {
+			writeError(w, http.StatusGone, "link disabled")
+			return
+		}
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "link not found")
 			return

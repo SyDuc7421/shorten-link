@@ -29,6 +29,11 @@ func (NoopPublisher) Publish(_ context.Context, _ string, _ any) error { return 
 
 const (
 	cacheTTL       = 24 * time.Hour
+
+	// disabledMarker is cached instead of a URL for a disabled link, so clicks
+	// on a disabled (often abusive) link do not each query MySQL.
+	disabledMarker   = "!disabled"
+	disabledCacheTTL = 5 * time.Minute
 	publishTimeout = 2 * time.Second
 	dnsTimeout     = 2 * time.Second
 
@@ -163,6 +168,9 @@ func aliasProblem(alias string) string {
 // Redis-first; falls back to MySQL on miss. Click event is published async.
 func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) {
 	if rawURL, err := s.cache.Get(ctx, code); err == nil {
+		if rawURL == disabledMarker {
+			return "", ErrLinkDisabled
+		}
 		s.publishAsync("link.clicked", map[string]any{"code": code})
 		return rawURL, nil
 	}
@@ -170,6 +178,10 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) 
 	link, err := s.repo.GetByCode(ctx, code)
 	if err != nil {
 		return "", fmt.Errorf("service: resolve: %w", err)
+	}
+	if link.DisabledAt != nil || link.OwnerDisabled {
+		s.cache.Set(ctx, code, disabledMarker, disabledCacheTTL) //nolint:errcheck
+		return "", ErrLinkDisabled
 	}
 	if link.ExpiresAt != nil && time.Now().After(*link.ExpiresAt) {
 		return "", ErrNotFound

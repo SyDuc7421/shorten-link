@@ -21,6 +21,9 @@ var ErrInvalidAlias = errors.New("service: alias must be 3-16 characters of A-Z,
 // ErrCodeTaken is returned by repositories when a short code is already in use.
 var ErrCodeTaken = errors.New("service: short code already taken")
 
+// ErrLinkDisabled is returned when an admin disabled the link or its owner.
+var ErrLinkDisabled = errors.New("service: link disabled")
+
 // ErrQuotaExceeded is returned when a user has created quota_daily links today (UTC).
 var ErrQuotaExceeded = errors.New("service: daily link quota exceeded")
 
@@ -65,4 +68,6 @@ type LinkCache interface {
 	Get(ctx context.Context, code string) (string, error)
 	Set(ctx context.Context, code string, url string, ttl time.Duration) error
 	Delete(ctx context.Context, code string) error
+	// DeleteMany removes several codes; used when a whole user is disabled.
+	DeleteMany(ctx context.Context, codes []string) error
 }

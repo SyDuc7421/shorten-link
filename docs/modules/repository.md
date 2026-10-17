@@ -35,7 +35,9 @@ translate them:
   guarantees that two links never share a code; the service's "is it taken?"
   check is only a convenience for the user.
 - **`GetByCode`** reads by `short_code`. The column uses a binary collation, so
-  `Sale` and `sale` are different codes (see [database.md](database.md)).
+  `Sale` and `sale` are different codes (see [database.md](database.md)). It
+  joins `users` to fill `OwnerDisabled`, so a redirect can refuse every link
+  of a disabled user without a second query.
 - **`Delete`** runs `DELETE ... WHERE short_code = ? AND user_id = ?`. If no row
   was deleted, it returns `ErrNotFound`. This one query both checks ownership
   and deletes, so another user's link looks exactly like a missing one.
@@ -63,7 +65,7 @@ cannot tell "no such user" apart from "same hash".
 
 | Key | Value | Expiry | Used for |
 |---|---|---|---|
-| `sl:<code>` | original URL | 24 h, or the link's expiry if sooner | Redirect cache |
+| `sl:<code>` | original URL, or `!disabled` | 24 h, or the link's expiry if sooner; 5 min for `!disabled` | Redirect cache. `DeleteMany` removes many codes with `DEL` in batches of 500 |
 | `rt:<jti>` | user ID | 7 days | Refresh tokens |
 | `urt:<userID>` | set of the user's refresh token IDs | 7 days, extended on every login or refresh | Revoking all sessions at once |
 | `urv:<userID>` | time of the last "revoke all", Unix ms | 7 days | Blocking tokens authorised before that moment |

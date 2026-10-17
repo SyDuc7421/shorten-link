@@ -158,7 +158,7 @@ Every request passes through these, outermost first:
 
 | Method | Path | Auth | What it does |
 |---|---|---|---|
-| GET | `/{code}` | — | Redirect to the original URL |
+| GET | `/{code}` | — | Redirect to the original URL (410 if an admin disabled the link or its owner) |
 | POST | `/api/links` | ✔ | Create a short link (optional custom `alias`) |
 | GET | `/api/links?cursor=` | ✔ | List your links, 20 per page |
 | GET | `/api/links/availability?alias=` | ✔ | Check whether a custom alias can be used |

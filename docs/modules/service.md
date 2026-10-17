@@ -81,10 +81,19 @@ if the link expires sooner), and a `link.created` event is published.
 
 ### Following a link: `Resolve`
 
-1. Look in the cache. On a hit, publish `link.clicked` and return the URL. The
-   database is not touched, which is what keeps redirects fast.
-2. On a miss, read the link from MySQL. If it has expired, return
-   `ErrNotFound`. Otherwise warm the cache, publish `link.clicked` and return.
+1. Look in the cache. If the value is the marker `!disabled`, return
+   `ErrLinkDisabled`. On any other hit, publish `link.clicked` and return the
+   URL. The database is not touched, which is what keeps redirects fast.
+2. On a miss, read the link from MySQL (`GetByCode` also says whether the
+   owner is disabled). If the link or its owner is disabled, cache
+   `!disabled` for 5 minutes and return `ErrLinkDisabled`; the marker stops
+   clicks on a disabled, often abusive, link from each querying MySQL. If the
+   link has expired, return `ErrNotFound`. Otherwise warm the cache, publish
+   `link.clicked` and return.
+
+No click is published for a disabled link. Whoever disables or enables a link
+or a user must delete the affected cache keys (see `AdminService`), otherwise
+a cached URL keeps redirecting for up to 24 h.
 
 Events are published **asynchronously** (`publishAsync`): a goroutine sends
 them with a 2 s timeout, and errors are ignored. A slow or absent RabbitMQ

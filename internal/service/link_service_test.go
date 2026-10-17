@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,13 +47,14 @@ func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (service
 
 type mockCache struct {
 	store  map[string]string
+	ttls   map[string]time.Duration
 	getErr error
 	setErr error
 	delErr error
 }
 
 func newMockCache() *mockCache {
-	return &mockCache{store: make(map[string]string)}
+	return &mockCache{store: make(map[string]string), ttls: make(map[string]time.Duration)}
 }
 
 func (c *mockCache) Get(_ context.Context, code string) (string, error) {
@@ -65,15 +67,22 @@ func (c *mockCache) Get(_ context.Context, code string) (string, error) {
 	}
 	return v, nil
 }
-func (c *mockCache) Set(_ context.Context, code, url string, _ time.Duration) error {
+func (c *mockCache) Set(_ context.Context, code, url string, ttl time.Duration) error {
 	if c.setErr != nil {
 		return c.setErr
 	}
 	c.store[code] = url
+	c.ttls[code] = ttl
 	return nil
 }
 func (c *mockCache) Delete(_ context.Context, code string) error {
 	delete(c.store, code)
+	return c.delErr
+}
+func (c *mockCache) DeleteMany(_ context.Context, codes []string) error {
+	for _, code := range codes {
+		delete(c.store, code)
+	}
 	return c.delErr
 }
 
@@ -493,5 +502,58 @@ func TestShorten_DisabledUser(t *testing.T) {
 	}
 	if created {
 		t.Error("link created for a disabled user")
+	}
+}
+
+// countingPublisher counts published events.
+type countingPublisher struct{ n atomic.Int32 }
+
+func (p *countingPublisher) Publish(_ context.Context, _ string, _ any) error {
+	p.n.Add(1)
+	return nil
+}
+
+func TestResolve_DisabledLinkOrOwner(t *testing.T) {
+	now := time.Now()
+	for name, link := range map[string]*service.Link{
+		"link disabled":  {ShortCode: "abc", OriginalURL: "https://e.com", DisabledAt: &now},
+		"owner disabled": {ShortCode: "abc", OriginalURL: "https://e.com", OwnerDisabled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cache := newMockCache()
+			pub := &countingPublisher{}
+			repo := &mockRepo{getByCodeFn: func(_ string) (*service.Link, error) { return link, nil }}
+			svc := service.NewLinkService(repo, cache, nil, pub)
+
+			if _, err := svc.Resolve(context.Background(), "abc"); !errors.Is(err, service.ErrLinkDisabled) {
+				t.Fatalf("want ErrLinkDisabled, got %v", err)
+			}
+			if cache.store["abc"] != "!disabled" || cache.ttls["abc"] != 5*time.Minute {
+				t.Errorf("want !disabled cached for 5m, got %q for %v", cache.store["abc"], cache.ttls["abc"])
+			}
+			time.Sleep(50 * time.Millisecond)
+			if pub.n.Load() != 0 {
+				t.Error("click published for a disabled link")
+			}
+		})
+	}
+}
+
+func TestResolve_CachedDisabledMarker(t *testing.T) {
+	cache := newMockCache()
+	cache.store["abc"] = "!disabled"
+	pub := &countingPublisher{}
+	repo := &mockRepo{getByCodeFn: func(_ string) (*service.Link, error) {
+		t.Error("repo should not be called on a cached marker")
+		return nil, nil
+	}}
+	svc := service.NewLinkService(repo, cache, nil, pub)
+
+	if _, err := svc.Resolve(context.Background(), "abc"); !errors.Is(err, service.ErrLinkDisabled) {
+		t.Fatalf("want ErrLinkDisabled, got %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if pub.n.Load() != 0 {
+		t.Error("click published for a disabled link")
 	}
 }

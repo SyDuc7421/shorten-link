@@ -28,14 +28,14 @@ type NoopPublisher struct{}
 func (NoopPublisher) Publish(_ context.Context, _ string, _ any) error { return nil }
 
 const (
-	cacheTTL       = 24 * time.Hour
+	cacheTTL = 24 * time.Hour
 
 	// disabledMarker is cached instead of a URL for a disabled link, so clicks
 	// on a disabled (often abusive) link do not each query MySQL.
 	disabledMarker   = "!disabled"
 	disabledCacheTTL = 5 * time.Minute
-	publishTimeout = 2 * time.Second
-	dnsTimeout     = 2 * time.Second
+	publishTimeout   = 2 * time.Second
+	dnsTimeout       = 2 * time.Second
 
 	maxCodeAttempts = 3
 )

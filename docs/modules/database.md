@@ -42,10 +42,18 @@ so running it twice does nothing the second time.
 | `disabled_at` | `DATETIME`, nullable. Set while an admin has disabled this link |
 | `created_at`, `updated_at` | Set by MySQL |
 
-### `analytics_daily`, `audit_log`
+### `analytics_daily`
 
-Created by migration 003 for planned features (per-day click history, audit
-trail). Nothing reads or writes them yet.
+Created by migration 003 for per-day click history. Nothing reads or writes it
+yet.
+
+### `audit_log`
+
+One row per admin action, written in the same transaction as the change (see
+[repository.md](repository.md)). `user_id` is the admin (`0` for the CLI),
+`action` is e.g. `user.disable` or `link.delete`, `resource_type` +
+`resource_id` name the target, `metadata` is JSON (reason, before/after,
+code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 
 ## History
 

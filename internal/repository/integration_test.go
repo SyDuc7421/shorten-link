@@ -606,3 +606,33 @@ func TestTokenRedis_StoreRefreshToken_BlockedAfterRevoke(t *testing.T) {
 		t.Errorf("another user's store must not be affected: %v", err)
 	}
 }
+
+func TestLinkMySQL_QuotaUsage(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash, quota_daily) VALUES (1, 'a@b.com', 'x', 5), (2, 'c@d.com', 'x', 100)`) //nolint:errcheck
+	for _, l := range []*service.Link{
+		{ID: 10, UserID: 1, ShortCode: "old", OriginalURL: "https://e.com"},   // before sinceID
+		{ID: 20, UserID: 1, ShortCode: "new1", OriginalURL: "https://e.com"},  // counted
+		{ID: 30, UserID: 1, ShortCode: "new2", OriginalURL: "https://e.com"},  // counted
+		{ID: 40, UserID: 2, ShortCode: "other", OriginalURL: "https://e.com"}, // other user
+	} {
+		if err := repo.Create(ctx, l); err != nil {
+			t.Fatalf("create %s: %v", l.ShortCode, err)
+		}
+	}
+
+	used, limit, err := repo.QuotaUsage(ctx, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if used != 2 || limit != 5 {
+		t.Errorf("want used=2 limit=5, got used=%d limit=%d", used, limit)
+	}
+
+	if _, _, err := repo.QuotaUsage(ctx, 999, 0); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("unknown user: want ErrNotFound, got %v", err)
+	}
+}

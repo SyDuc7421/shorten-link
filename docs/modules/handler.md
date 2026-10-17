@@ -52,6 +52,7 @@ custom aliases.
 | `ErrInvalidAlias` | 400 | alias format rules |
 | `ErrForbiddenURL` | 422 | `URL targets a forbidden address` |
 | `ErrCodeTaken` | 409 | `alias already taken` |
+| `ErrQuotaExceeded` | 429 | `daily link quota exceeded`, with `Retry-After` = seconds until 00:00 UTC |
 | body over 1 MB | 413 | `request body too large` |
 | anything else | 500 | `failed to shorten URL` |
 

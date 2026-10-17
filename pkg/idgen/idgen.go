@@ -37,6 +37,13 @@ func NewGenerator(nodeID int64) (*Generator, error) {
 	return &Generator{nodeID: nodeID}, nil
 }
 
+// MinIDAt returns the smallest ID that NextID can return at or after t, on any
+// node. Because IDs are time-ordered, "id >= MinIDAt(t)" selects rows created
+// at or after t.
+func MinIDAt(t time.Time) int64 {
+	return (t.UnixMilli() - epoch) << timeShift
+}
+
 // NextID returns a unique, time-ordered int64 ID.
 func (g *Generator) NextID() int64 {
 	g.mu.Lock()

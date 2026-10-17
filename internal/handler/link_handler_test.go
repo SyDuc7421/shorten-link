@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -369,6 +370,7 @@ func TestLinkHandler_Shorten_AliasErrors(t *testing.T) {
 	}{
 		{service.ErrInvalidAlias, http.StatusBadRequest},
 		{fmt.Errorf("service: shorten: %w", service.ErrCodeTaken), http.StatusConflict},
+		{service.ErrQuotaExceeded, http.StatusTooManyRequests},
 	} {
 		mux := newLinkMux(&mockLinkSvc{
 			shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
@@ -426,5 +428,27 @@ func TestLinkHandler_CheckAlias_NoAuth(t *testing.T) {
 	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/links/availability?alias=abc", nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+func TestLinkHandler_Shorten_QuotaExceededRetryAfterMidnightUTC(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
+			return nil, service.ErrQuotaExceeded
+		},
+	})
+	req := withUserID(httptest.NewRequest("POST", "/api/links",
+		bytes.NewBufferString(`{"url":"https://example.com"}`)), 1)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("want 429, got %d", w.Code)
+	}
+	now := time.Now().UTC()
+	want := int(now.Truncate(24*time.Hour).Add(24*time.Hour).Sub(now).Seconds()) + 1
+	got, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	if err != nil || got < want-2 || got > want {
+		t.Errorf("want Retry-After about %d, got %q", want, w.Header().Get("Retry-After"))
 	}
 }

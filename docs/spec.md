@@ -49,7 +49,7 @@ WAF, captcha, payments.
 | FR-L6 | Owner lists their links, 20 per page, cursor-paginated | ✅ oldest first (ascending id) |
 | FR-L7 | Owner deletes a link; it stops redirecting immediately | ✅ cache invalidated |
 | FR-L8 | Only the owner can list or delete their links | ✅ |
-| FR-L9 | Daily quota per user (`users.quota_daily`) is enforced on creation | ❌ column exists, never checked |
+| FR-L9 | Daily quota per user (`users.quota_daily`) is enforced on creation | ✅ per UTC day, `429` + `Retry-After`; deleted links do not count; concurrent creates can overshoot slightly |
 | FR-L10 | Abuse handling: block known phishing/malware targets, report and disable links | ❌ |
 | FR-L11 | Optional custom alias (3–16 of `A-Za-z0-9_-`, case-sensitive; `api`, `docs`, `healthz`, `metrics` reserved); taken → `409`. `GET /api/links/availability?alias=` checks it while typing (60/min per IP) | ✅ |
 
@@ -178,7 +178,7 @@ Ordered by risk if you launch without it.
 3. ~~CI pipeline~~ ✅ done (verify on first GitHub run)
 4. MySQL backups (NFR-D3). Redis AOF is done.
 5. Abuse handling: Safe Browsing check on create and a way to disable a link (FR-L10). Public shorteners get abused within days.
-6. Enforce `quota_daily` (FR-L9).
+6. ~~Enforce `quota_daily` (FR-L9).~~ ✅ done
 7. ~~Recover middleware + per-request access log (NFR-R9, OB1).~~ ✅ done
 8. Update `openapi.yaml` (FR-O4).
 

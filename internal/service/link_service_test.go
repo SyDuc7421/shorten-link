@@ -13,13 +13,19 @@ import (
 // --- mock repository ---
 
 type mockRepo struct {
-	createErr    error
-	getByCodeFn  func(code string) (*service.Link, error)
-	deleteErr    error
-	listFn       func() ([]*service.Link, error)
+	createErr   error
+	getByCodeFn func(code string) (*service.Link, error)
+	deleteErr   error
+	listFn      func() ([]*service.Link, error)
+	createFn    func(link *service.Link) error // overrides createErr when set
 }
 
-func (m *mockRepo) Create(_ context.Context, _ *service.Link) error { return m.createErr }
+func (m *mockRepo) Create(_ context.Context, link *service.Link) error {
+	if m.createFn != nil {
+		return m.createFn(link)
+	}
+	return m.createErr
+}
 func (m *mockRepo) GetByCode(_ context.Context, code string) (*service.Link, error) {
 	return m.getByCodeFn(code)
 }
@@ -32,10 +38,10 @@ func (m *mockRepo) BatchUpdateClicks(_ context.Context, _ map[string]int64) erro
 // --- mock cache ---
 
 type mockCache struct {
-	store    map[string]string
-	getErr   error
-	setErr   error
-	delErr   error
+	store  map[string]string
+	getErr error
+	setErr error
+	delErr error
 }
 
 func newMockCache() *mockCache {
@@ -88,7 +94,7 @@ func newSvcWithGen(repo service.LinkRepository, cache service.LinkCache, gen *id
 func TestShorten_InvalidURL(t *testing.T) {
 	svc := newSvc(&mockRepo{}, newMockCache())
 	for _, bad := range []string{"ftp://x.com", "not-a-url", "", "javascript:alert(1)"} {
-		if _, err := svc.Shorten(context.Background(), 1, bad, nil); !errors.Is(err, service.ErrInvalidURL) {
+		if _, err := svc.Shorten(context.Background(), 1, bad, "", nil); !errors.Is(err, service.ErrInvalidURL) {
 			t.Errorf("Shorten(%q): want ErrInvalidURL, got %v", bad, err)
 		}
 	}
@@ -97,7 +103,7 @@ func TestShorten_InvalidURL(t *testing.T) {
 func TestShorten_RepoError(t *testing.T) {
 	repo := &mockRepo{createErr: errors.New("db down")}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
-	_, err := svc.Shorten(context.Background(), 1, "https://example.com", nil)
+	_, err := svc.Shorten(context.Background(), 1, "https://example.com", "", nil)
 	if err == nil {
 		t.Error("expected error from repo, got nil")
 	}
@@ -110,7 +116,7 @@ func TestShorten_OK(t *testing.T) {
 	}}
 	svc := newSvcWithGen(repo, cache, newGen(t))
 
-	link, err := svc.Shorten(context.Background(), 1, "https://example.com", nil)
+	link, err := svc.Shorten(context.Background(), 1, "https://example.com", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -239,7 +245,7 @@ func TestShorten_ForbiddenAddresses(t *testing.T) {
 		"http://100.64.0.1/",
 		"http://[::ffff:127.0.0.1]/",
 	} {
-		if _, err := svc.Shorten(context.Background(), 1, u, nil); !errors.Is(err, service.ErrForbiddenURL) {
+		if _, err := svc.Shorten(context.Background(), 1, u, "", nil); !errors.Is(err, service.ErrForbiddenURL) {
 			t.Errorf("Shorten(%q): want ErrForbiddenURL, got %v", u, err)
 		}
 	}
@@ -247,7 +253,7 @@ func TestShorten_ForbiddenAddresses(t *testing.T) {
 
 func TestShorten_UnresolvableHost(t *testing.T) {
 	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
-	_, err := svc.Shorten(context.Background(), 1, "http://does-not-exist.invalid/", nil)
+	_, err := svc.Shorten(context.Background(), 1, "http://does-not-exist.invalid/", "", nil)
 	if !errors.Is(err, service.ErrInvalidURL) {
 		t.Errorf("want ErrInvalidURL, got %v", err)
 	}
@@ -256,7 +262,7 @@ func TestShorten_UnresolvableHost(t *testing.T) {
 func TestShorten_ExpiryInPast(t *testing.T) {
 	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
 	past := time.Now().Add(-time.Minute)
-	_, err := svc.Shorten(context.Background(), 1, "https://example.com", &past)
+	_, err := svc.Shorten(context.Background(), 1, "https://example.com", "", &past)
 	if !errors.Is(err, service.ErrInvalidExpiry) {
 		t.Errorf("want ErrInvalidExpiry, got %v", err)
 	}
@@ -287,5 +293,133 @@ func TestResolve_PublishesWithTimeout(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("click event not published")
+	}
+}
+
+// --- custom alias tests ---
+
+func TestShorten_CustomAlias(t *testing.T) {
+	cache := newMockCache()
+	var saved *service.Link
+	repo := &mockRepo{createFn: func(l *service.Link) error { saved = l; return nil }}
+	svc := newSvcWithGen(repo, cache, newGen(t))
+
+	link, err := svc.Shorten(context.Background(), 1, "https://example.com", "Sale-2026_x", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if link.ShortCode != "Sale-2026_x" || saved.ShortCode != "Sale-2026_x" {
+		t.Errorf("short code = %q (saved %q), want the alias unchanged", link.ShortCode, saved.ShortCode)
+	}
+	if _, ok := cache.store["Sale-2026_x"]; !ok {
+		t.Error("cache not warmed under the alias")
+	}
+}
+
+func TestShorten_InvalidAlias(t *testing.T) {
+	repo := &mockRepo{createFn: func(*service.Link) error {
+		t.Error("repo.Create called for an invalid alias")
+		return nil
+	}}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+	for _, alias := range []string{
+		"ab",                // too short
+		"abcdefghijklmnopq", // 17 chars
+		"has space",
+		"a/b",
+		"a.b",
+		"ünïcode",
+		"docs", "API", "Healthz", "metrics", // reserved, any case
+	} {
+		if _, err := svc.Shorten(context.Background(), 1, "https://example.com", alias, nil); !errors.Is(err, service.ErrInvalidAlias) {
+			t.Errorf("Shorten(alias %q): want ErrInvalidAlias, got %v", alias, err)
+		}
+	}
+}
+
+func TestShorten_AliasTaken(t *testing.T) {
+	calls := 0
+	repo := &mockRepo{createFn: func(*service.Link) error { calls++; return service.ErrCodeTaken }}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+
+	_, err := svc.Shorten(context.Background(), 1, "https://example.com", "taken", nil)
+	if !errors.Is(err, service.ErrCodeTaken) {
+		t.Errorf("want ErrCodeTaken, got %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("repo.Create called %d times, want 1 (an alias must not be retried)", calls)
+	}
+}
+
+func TestShorten_GeneratedCodeCollisionRetries(t *testing.T) {
+	var codes []string
+	repo := &mockRepo{createFn: func(l *service.Link) error {
+		codes = append(codes, l.ShortCode)
+		if len(codes) < 3 {
+			return service.ErrCodeTaken
+		}
+		return nil
+	}}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+
+	link, err := svc.Shorten(context.Background(), 1, "https://example.com", "", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(codes) != 3 || codes[0] == codes[1] || codes[1] == codes[2] {
+		t.Fatalf("attempted codes %v, want 3 distinct", codes)
+	}
+	if link.ShortCode != codes[2] {
+		t.Errorf("returned code %q, want the one that was stored (%q)", link.ShortCode, codes[2])
+	}
+}
+
+func TestShorten_GeneratedCodeCollisionGivesUp(t *testing.T) {
+	calls := 0
+	repo := &mockRepo{createFn: func(*service.Link) error { calls++; return service.ErrCodeTaken }}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+
+	if _, err := svc.Shorten(context.Background(), 1, "https://example.com", "", nil); !errors.Is(err, service.ErrCodeTaken) {
+		t.Errorf("want ErrCodeTaken, got %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("repo.Create called %d times, want 3", calls)
+	}
+}
+
+func TestCheckAlias(t *testing.T) {
+	repo := &mockRepo{getByCodeFn: func(code string) (*service.Link, error) {
+		if code == "taken" {
+			return &service.Link{ShortCode: code}, nil
+		}
+		return nil, service.ErrNotFound
+	}}
+	svc := newSvc(repo, newMockCache())
+
+	for _, tc := range []struct {
+		alias, reason string
+		available     bool
+	}{
+		{"free-one", "", true},
+		{"Taken", "", true}, // codes are case-sensitive
+		{"taken", "taken", false},
+		{"ab", "invalid", false},
+		{"Docs", "reserved", false},
+	} {
+		available, reason, err := svc.CheckAlias(context.Background(), tc.alias)
+		if err != nil {
+			t.Fatalf("CheckAlias(%q): %v", tc.alias, err)
+		}
+		if available != tc.available || reason != tc.reason {
+			t.Errorf("CheckAlias(%q) = (%v, %q), want (%v, %q)", tc.alias, available, reason, tc.available, tc.reason)
+		}
+	}
+}
+
+func TestCheckAlias_RepoError(t *testing.T) {
+	repo := &mockRepo{getByCodeFn: func(string) (*service.Link, error) { return nil, errors.New("db down") }}
+	svc := newSvc(repo, newMockCache())
+	if _, _, err := svc.CheckAlias(context.Background(), "free-one"); err == nil {
+		t.Error("expected error, got nil")
 	}
 }

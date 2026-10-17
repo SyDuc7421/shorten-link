@@ -149,6 +149,8 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 	loginRL := middleware.RateLimit(rdb, "login", 10, time.Minute)(mux)
 	registerRL := middleware.RateLimit(rdb, "register", 5, time.Hour)(mux)
 	refreshRL := middleware.RateLimit(rdb, "refresh", 30, time.Minute)(mux)
+	// called while the user types an alias; also stops bulk probing of codes
+	aliasCheckRL := middleware.RateLimit(rdb, "alias-check", 60, time.Minute)(mux)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -162,6 +164,8 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 			registerRL.ServeHTTP(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/refresh":
 			refreshRL.ServeHTTP(w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/links/availability":
+			aliasCheckRL.ServeHTTP(w, r)
 		default:
 			mux.ServeHTTP(w, r)
 		}

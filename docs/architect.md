@@ -157,8 +157,9 @@ Every request passes through these, outermost first:
 | Method | Path | Auth | What it does |
 |---|---|---|---|
 | GET | `/{code}` | — | Redirect to the original URL |
-| POST | `/api/links` | ✔ | Create a short link |
+| POST | `/api/links` | ✔ | Create a short link (optional custom `alias`) |
 | GET | `/api/links?cursor=` | ✔ | List your links, 20 per page |
+| GET | `/api/links/availability?alias=` | ✔ | Check whether a custom alias can be used |
 | DELETE | `/api/links/{code}` | ✔ | Delete one of your links |
 | POST | `/api/auth/register` | — | Create account, returns tokens |
 | POST | `/api/auth/login` | — | Log in, returns tokens |
@@ -169,6 +170,8 @@ Every request passes through these, outermost first:
 ---
 
 ## 5. Modules, one by one
+
+Each package has its own page with the details in [modules/](modules/README.md).
 
 | Package | Responsibility | Read this first |
 |---|---|---|
@@ -193,7 +196,7 @@ Every request passes through these, outermost first:
 
 ## 6. How short codes are made
 
-No random strings and no "does this code exist?" loop.
+No random strings: uniqueness comes from the ID itself.
 
 1. `idgen` produces a **Snowflake ID**: a 64-bit number made of
    *milliseconds since 2024-01-01* + *node ID (0–1023)* + *sequence (0–4095)*.
@@ -201,6 +204,12 @@ No random strings and no "does this code exist?" loop.
 
 Codes are therefore unique as long as **every server instance has a different
 `NODE_ID`**. Two instances with the same node ID can generate the same code.
+
+A user can instead pick a **custom alias** (3–16 of `A-Za-z0-9_-`). Aliases
+share the `short_code` column, which compares bytes (`utf8mb4_bin`), so codes
+are case-sensitive. An alias may take a code the generator later produces;
+`Shorten` then gets `ErrCodeTaken` from the unique key and draws a new ID, up
+to 3 attempts.
 
 ---
 

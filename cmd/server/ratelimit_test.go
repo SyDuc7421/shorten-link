@@ -56,6 +56,7 @@ func TestWithRateLimits(t *testing.T) {
 		{http.MethodPost, "/api/auth/refresh", 30},
 		{http.MethodPost, "/api/links", 10},
 		{http.MethodGet, "/abc123", 60},
+		{http.MethodGet, "/api/links/availability?alias=abc", 60},
 	} {
 		if got := countUntilLimited(h, tc.method, tc.path, tc.limit+5); got != tc.limit {
 			t.Errorf("%s %s: want limited after %d requests, got %d", tc.method, tc.path, tc.limit, got)

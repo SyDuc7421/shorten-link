@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/april/shorten-link/internal/service"
@@ -32,6 +33,10 @@ func (r *linkMySQL) Create(ctx context.Context, link *service.Link) error {
 		"original_url": link.OriginalURL,
 		"expires_at":   link.ExpiresAt,
 	})
+	var myErr *mysql.MySQLError
+	if errors.As(err, &myErr) && myErr.Number == mysqlErrDuplicateEntry {
+		return service.ErrCodeTaken
+	}
 	if err != nil {
 		return fmt.Errorf("repository: create link: %w", err)
 	}

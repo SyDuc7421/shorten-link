@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,14 +20,18 @@ import (
 
 // mockLinkSvc implements handler.LinkServicer.
 type mockLinkSvc struct {
-	shortenFn    func(ctx context.Context, userID int64, rawURL string, expiresAt *time.Time) (*service.Link, error)
+	shortenFn    func(ctx context.Context, userID int64, rawURL, alias string, expiresAt *time.Time) (*service.Link, error)
+	checkAliasFn func(ctx context.Context, alias string) (bool, string, error)
 	resolveFn    func(ctx context.Context, code string) (string, error)
 	deleteFn     func(ctx context.Context, code string, userID int64) error
 	listByUserFn func(ctx context.Context, userID int64, afterID int64, limit int) ([]*service.Link, error)
 }
 
-func (m *mockLinkSvc) Shorten(ctx context.Context, userID int64, rawURL string, expiresAt *time.Time) (*service.Link, error) {
-	return m.shortenFn(ctx, userID, rawURL, expiresAt)
+func (m *mockLinkSvc) Shorten(ctx context.Context, userID int64, rawURL, alias string, expiresAt *time.Time) (*service.Link, error) {
+	return m.shortenFn(ctx, userID, rawURL, alias, expiresAt)
+}
+func (m *mockLinkSvc) CheckAlias(ctx context.Context, alias string) (bool, string, error) {
+	return m.checkAliasFn(ctx, alias)
 }
 func (m *mockLinkSvc) Resolve(ctx context.Context, code string) (string, error) {
 	return m.resolveFn(ctx, code)
@@ -58,7 +63,7 @@ var _ = errors.New
 
 func TestLinkHandler_Shorten_OK(t *testing.T) {
 	mux := newLinkMux(&mockLinkSvc{
-		shortenFn: func(_ context.Context, _ int64, _ string, _ *time.Time) (*service.Link, error) {
+		shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
 			return &service.Link{ShortCode: "abc123", OriginalURL: "https://example.com"}, nil
 		},
 	})
@@ -113,7 +118,7 @@ func TestLinkHandler_Shorten_InvalidBody(t *testing.T) {
 
 func TestLinkHandler_Shorten_InvalidURL(t *testing.T) {
 	mux := newLinkMux(&mockLinkSvc{
-		shortenFn: func(_ context.Context, _ int64, _ string, _ *time.Time) (*service.Link, error) {
+		shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
 			return nil, service.ErrInvalidURL
 		},
 	})
@@ -300,7 +305,7 @@ func TestLinkHandler_List_NextCursorWhenFull(t *testing.T) {
 
 func TestLinkHandler_Shorten_ExpiryInPast(t *testing.T) {
 	mux := newLinkMux(&mockLinkSvc{
-		shortenFn: func(_ context.Context, _ int64, _ string, _ *time.Time) (*service.Link, error) {
+		shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
 			return nil, service.ErrInvalidExpiry
 		},
 	})
@@ -328,5 +333,98 @@ func TestLinkHandler_Shorten_BodyTooLarge(t *testing.T) {
 
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Errorf("want 413, got %d", w.Code)
+	}
+}
+
+// --- custom alias tests ---
+
+func TestLinkHandler_Shorten_PassesAlias(t *testing.T) {
+	var gotAlias string
+	mux := newLinkMux(&mockLinkSvc{
+		shortenFn: func(_ context.Context, _ int64, _, alias string, _ *time.Time) (*service.Link, error) {
+			gotAlias = alias
+			return &service.Link{ShortCode: alias}, nil
+		},
+	})
+	req := withUserID(httptest.NewRequest("POST", "/api/links",
+		bytes.NewBufferString(`{"url":"https://example.com","alias":"Sale-2026"}`)), 1)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body)
+	}
+	if gotAlias != "Sale-2026" {
+		t.Errorf("service got alias %q, want Sale-2026", gotAlias)
+	}
+	if !strings.Contains(w.Body.String(), `"short_url":"https://short.ly/Sale-2026"`) {
+		t.Errorf("short_url not built from alias: %s", w.Body)
+	}
+}
+
+func TestLinkHandler_Shorten_AliasErrors(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{service.ErrInvalidAlias, http.StatusBadRequest},
+		{fmt.Errorf("service: shorten: %w", service.ErrCodeTaken), http.StatusConflict},
+	} {
+		mux := newLinkMux(&mockLinkSvc{
+			shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
+				return nil, tc.err
+			},
+		})
+		req := withUserID(httptest.NewRequest("POST", "/api/links",
+			bytes.NewBufferString(`{"url":"https://example.com","alias":"x-y-z"}`)), 1)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Errorf("%v: want %d, got %d", tc.err, tc.want, w.Code)
+		}
+	}
+}
+
+func TestLinkHandler_CheckAlias(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		checkAliasFn: func(_ context.Context, alias string) (bool, string, error) {
+			if alias == "taken" {
+				return false, "taken", nil
+			}
+			return true, "", nil
+		},
+	})
+	for _, tc := range []struct{ alias, want string }{
+		{"taken", `{"alias":"taken","available":false,"reason":"taken"}`},
+		{"free", `{"alias":"free","available":true}`},
+	} {
+		req := withUserID(httptest.NewRequest("GET", "/api/links/availability?alias="+tc.alias, nil), 1)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("alias %q: want 200, got %d: %s", tc.alias, w.Code, w.Body)
+		}
+		if got := strings.TrimSpace(w.Body.String()); got != tc.want {
+			t.Errorf("alias %q: body %s, want %s", tc.alias, got, tc.want)
+		}
+	}
+}
+
+func TestLinkHandler_CheckAlias_MissingParam(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{})
+	req := withUserID(httptest.NewRequest("GET", "/api/links/availability", nil), 1)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("want 400, got %d", w.Code)
+	}
+}
+
+func TestLinkHandler_CheckAlias_NoAuth(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/links/availability?alias=abc", nil))
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401, got %d", w.Code)
 	}
 }

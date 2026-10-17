@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -103,5 +104,52 @@ func TestRequireAuth_WithoutUserID_Returns401(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+type adminCheckerFunc func(userID int64) (bool, error)
+
+func (f adminCheckerFunc) IsActiveAdmin(_ context.Context, userID int64) (bool, error) { return f(userID) }
+
+func TestRequireAdmin(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		userID     int64 // 0 = no user in context
+		isAdmin    bool
+		checkErr   error
+		wantStatus int
+		wantNext   bool
+	}{
+		{name: "no user", wantStatus: http.StatusUnauthorized},
+		{name: "not admin", userID: 2, wantStatus: http.StatusForbidden},
+		{name: "check fails", userID: 2, checkErr: errors.New("db down"), wantStatus: http.StatusInternalServerError},
+		{name: "admin", userID: 1, isAdmin: true, wantStatus: http.StatusOK, wantNext: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotID int64
+			checker := adminCheckerFunc(func(id int64) (bool, error) { gotID = id; return tc.isAdmin, tc.checkErr })
+			called := false
+			next := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true })
+
+			req := httptest.NewRequest("GET", "/api/admin/me", nil)
+			if tc.userID != 0 {
+				req = req.WithContext(ctxkey.SetUserID(req.Context(), tc.userID))
+			}
+			w := httptest.NewRecorder()
+			middleware.RequireAdmin(checker)(next).ServeHTTP(w, req)
+
+			if w.Code != tc.wantStatus || called != tc.wantNext {
+				t.Fatalf("want %d next=%v, got %d next=%v", tc.wantStatus, tc.wantNext, w.Code, called)
+			}
+			if tc.userID != 0 && gotID != tc.userID {
+				t.Errorf("checker got user %d, want %d", gotID, tc.userID)
+			}
+			if !tc.wantNext && w.Header().Get("Content-Type") != "application/json" {
+				t.Errorf("want JSON content type, got %q", w.Header().Get("Content-Type"))
+			}
+			if tc.wantStatus == http.StatusForbidden && w.Body.String() != `{"error":"forbidden"}`+"\n" {
+				t.Errorf("unexpected body %q", w.Body.String())
+			}
+		})
 	}
 }

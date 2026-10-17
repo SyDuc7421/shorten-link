@@ -21,6 +21,14 @@ Authentication is split into two steps on purpose:
 2. **`RequireAuth`** wraps only protected routes. If the context has no user
    ID, it answers `401 {"error":"unauthorized"}` and stops.
 
+3. **`RequireAdmin(checker)`** wraps the `/api/admin/*` routes, after
+   `RequireAuth`. It asks `checker.IsActiveAdmin(userID)` (implemented by
+   `service.AdminService`, which reads the user from MySQL) on **every**
+   request: `403 {"error":"forbidden"}` unless the user is an admin and not
+   disabled, `500` if the lookup fails. The role is deliberately not in the
+   JWT: a claim would keep working for up to 15 minutes after an admin is
+   revoked or disabled.
+
 This split lets public and protected routes share one pipeline. A public route
 such as a redirect never fails because someone sent an expired token.
 

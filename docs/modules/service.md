@@ -5,7 +5,7 @@ makes a URL acceptable, how a short code is chosen, when an account is locked,
 how tokens rotate. It knows nothing about HTTP, SQL or Redis commands.
 
 **Where it sits.** Handlers call it. It talks to storage only through
-interfaces it declares itself, in `link.go` and `auth.go`:
+interfaces it declares itself, in `link.go`, `auth.go` and `admin.go`:
 
 | Interface | Implemented by | Purpose |
 |---|---|---|
@@ -15,6 +15,7 @@ interfaces it declares itself, in `link.go` and `auth.go`:
 | `UserRepository` | `repository.userMySQL` | Store and read users |
 | `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
 | `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
+| `AdminRepository` | `repository.adminMySQL` | Admin lists and audited writes |
 
 Because the interfaces live here, service tests use small in-file mocks and
 run without any database.
@@ -38,7 +39,13 @@ service wraps them with context (`fmt.Errorf("service: shorten: %w", err)`).
 | `ErrWeakPassword` | Password shorter than 8 or longer than 72 bytes |
 | `ErrInvalidCredentials` | Login failed (unknown email *or* wrong password) |
 | `ErrAccountLocked` | Too many failed logins for this email |
-| `ErrInvalidToken` | A JWT or refresh token is invalid, expired or already used |
+| `ErrInvalidToken` | A JWT or refresh token is invalid, expired or already used, or the account is disabled (refresh) |
+| `ErrAccountDisabled` | An admin disabled the account (login with the right password, link creation) |
+| `ErrQuotaExceeded` | The user already created `quota_daily` links today (UTC) |
+| `ErrLinkDisabled` | An admin disabled the link or its owner (redirect) |
+| `ErrSelfDisable` | An admin tried to disable their own account |
+| `ErrInvalidQuota` | `quota_daily` outside 0–100000 |
+| `ErrReasonTooLong` | An admin's reason is longer than 500 bytes |
 
 ## Links (`link_service.go`)
 
@@ -224,6 +231,37 @@ link. Putting it back would let a failing request be retried forever.
 Two limits worth knowing: an access token issued before the reset stays valid
 until it expires (at most 15 minutes), and refresh tokens issued before the
 per-user index existed are not revoked.
+
+## Admin (`admin_service.go`)
+
+`AdminService` backs `/api/admin/*` and the `server admin` command. The
+repository does the auditing (each write and its `audit_log` row are one
+transaction); the service validates input and keeps sessions and the redirect
+cache consistent with the database.
+
+- **`IsActiveAdmin`** reads the user on every call: role `admin` and not
+  disabled. `RequireAdmin` uses it, so revoking or disabling an admin takes
+  effect on their next request, not when their token expires.
+- **Validation:** `reason` at most 500 bytes (`ErrReasonTooLong`), quota
+  0–100000 (`ErrInvalidQuota`). Checked before anything is written.
+- **`DisableUser`** refuses `actorID == userID` (`ErrSelfDisable`), then:
+  1. marks the user disabled (audited),
+  2. revokes all refresh tokens (`RevokeAllRefreshTokens`),
+  3. deletes the cache keys of all their links (`DeleteMany`), so the next
+     click reads the disabled state from MySQL.
+
+  Steps 2 and 3 run even if the user was already disabled, so calling it again
+  after a failure in step 2 or 3 finishes the job. The user's access token
+  still works for up to 15 minutes, but login, refresh, link creation and the
+  admin API all check the database.
+- **`EnableUser`** clears the flag and purges the cache again, which removes
+  the `!disabled` markers. Links an admin disabled one by one stay disabled.
+- **Link disable/enable/delete** write through the repository, then delete
+  `sl:<code>`.
+- **`GetUser`** adds links created today (UTC, via `idgen.MinIDAt`) and total
+  clicks.
+- **`SetAdmin(email, admin)`** is for the CLI: it lower-cases the email and
+  sets the role with actor `0` (system).
 
 ## Before you change it
 

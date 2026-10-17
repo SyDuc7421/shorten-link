@@ -113,7 +113,7 @@ WAF, captcha, payments.
 | NFR-R6 | Dead-lettered clicks can be replayed | ❌ DLQ consumer logs and acks |
 | NFR-R7 | Lockout counter can never become permanent | ⚠️ `INCR` and `EXPIRE` are separate calls; crash between them leaves a key without TTL |
 | NFR-R8 | Concurrent workers cannot deadlock on click updates | ⚠️ rows updated in map order; sort codes before updating if running >1 worker |
-| NFR-R9 | Panics are recovered and returned as JSON 500 with request ID | ❌ relies on net/http default (connection dropped, plain stderr log) |
+| NFR-R9 | Panics are recovered and returned as JSON 500 with request ID | ✅ `Recover` middleware; ID in `X-Request-ID` header and log line |
 
 ### 3.4 Data
 
@@ -129,7 +129,7 @@ WAF, captcha, payments.
 
 | ID | Requirement | Status |
 |---|---|---|
-| NFR-OB1 | Structured JSON logs with request ID | ⚠️ logger is set up, but no access log line per request |
+| NFR-OB1 | Structured JSON logs with request ID | ✅ `AccessLog` writes one line per request; handlers/services do not log with the request logger yet |
 | NFR-OB2 | Metrics: RPS, latency, error rate, cache hit rate, publish errors | ❌ |
 | NFR-OB3 | Dashboards and alerts (error rate, DLQ depth, 5xx, dependency down) | ❌ |
 
@@ -179,7 +179,7 @@ Ordered by risk if you launch without it.
 4. MySQL backups (NFR-D3). Redis AOF is done.
 5. Abuse handling: Safe Browsing check on create and a way to disable a link (FR-L10). Public shorteners get abused within days.
 6. Enforce `quota_daily` (FR-L9).
-7. Recover middleware + per-request access log (NFR-R9, OB1).
+7. ~~Recover middleware + per-request access log (NFR-R9, OB1).~~ ✅ done
 8. Update `openapi.yaml` (FR-O4).
 
 **Should have soon after**

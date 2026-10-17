@@ -71,9 +71,34 @@ Reuses the incoming `X-Request-ID` header, or generates a random 32-hex-characte
 ID. The ID is echoed back in the response header, and a logger tagged with
 `request_id` is put in the context. Code further down can log with
 `logger.FromContext(ctx)` so every line for one request carries the same ID.
-No handler or service does that yet, and there is no per-request access log
-(NFR-OB1 in [spec.md](../spec.md)), so today the ID is mainly useful to clients
-reporting a problem.
+`AccessLog` and `Recover` do; handlers and services do not yet.
+
+### `AccessLog` (`accesslog.go`)
+
+After the request finishes, writes one Info line with message `request` and the
+fields `method`, `path`, `status`, `bytes`, `duration`, `ip` (same rule as
+`RateLimit`, see below) and `user_id` when a valid token was sent. The query
+string is left out because it can carry user input. It runs inside `RequestID`,
+so the line has `request_id`.
+
+It learns the status by wrapping the `ResponseWriter` (`statusRecorder`, which
+`Recover` reuses). Known gaps:
+
+- A request cut off by `http.TimeoutHandler` is logged with whatever status the
+  handler wrote, not the 503 the client got, because the timeout sits outside.
+- `/healthz` is logged too, so Docker health checks add a line every interval.
+
+### `Recover` (`recover.go`)
+
+Without it, a panic in a handler makes net/http drop the connection and print
+a plain-text stack to stderr. `Recover` catches the panic, logs `panic
+recovered` at Error level with the panic value and a stack trace (and
+`request_id`), and answers `500 {"error":"internal server error"}`. The client
+can quote the `X-Request-ID` header to find the log line.
+
+If the handler had already written a status, that status stays and nothing is
+appended; only the log line is written. `http.ErrAbortHandler` is re-panicked,
+because that is how code deliberately aborts a response in net/http.
 
 ### `SecureHeaders` (`secureheaders.go`)
 
@@ -97,5 +122,6 @@ handler can answer `413` rather than `400`.
 - `RequireAuth` writes its 401 with `http.Error`, which replaces the
   `Content-Type` with `text/plain`. The body is JSON, but the header says
   otherwise. Clients that check the header will notice.
-- Tests: `auth_test.go` and `requestid_test.go` are plain unit tests.
+- Tests: `auth_test.go`, `requestid_test.go`, `accesslog_test.go` and
+  `recover_test.go` are plain unit tests.
   `ratelimit_test.go` needs Docker (it starts a real Redis).

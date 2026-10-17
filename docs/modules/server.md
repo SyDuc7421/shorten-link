@@ -41,9 +41,11 @@ http.TimeoutHandler (10 s)          → 503 {"error":"request timeout"} if a han
     CORS                            → answers preflight, adds CORS headers for allowed origins
       JWTAuth                       → if a valid Bearer token is present, puts the user ID in the context
         RequestID                   → X-Request-ID header + request-scoped logger
-          MaxBodySize (1 MB)        → caps the request body
-            withRateLimits          → per-IP limits on selected routes
-              ServeMux              → the route handlers
+          AccessLog                 → one "request" log line per request, after it finishes
+            Recover                 → handler panic → logged error + 500 {"error":"internal server error"}
+              MaxBodySize (1 MB)    → caps the request body
+                withRateLimits      → per-IP limits on selected routes
+                  ServeMux          → the route handlers
 ```
 
 Two details that surprise people:

@@ -24,18 +24,10 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    cp .env.example .env
    ```
 
-   `.env.example` uses Docker hostnames. A process running on your host can't
-   resolve them, so change these lines in `.env`:
-
-   ```bash
-   BASE_URL=http://localhost:8080
-   MYSQL_HOST=localhost
-   REDIS_ADDR=localhost:6379
-   RABBITMQ_URL=amqp://guest:guest@localhost:5672/
-   ALLOWED_ORIGINS=          # or your frontend origin, e.g. http://localhost:3000
-   ```
-
-   `REDIS_PASSWORD` can be left empty locally, which turns Redis auth off.
+   The defaults point at `localhost` and work as-is for local dev. Set
+   `ALLOWED_ORIGINS` to your frontend's origin if it isn't
+   `http://localhost:3000`. `REDIS_PASSWORD` can be left empty locally, which
+   turns Redis auth off.
 
 2. Generate the JWT key pair (written to `./keys`, which git ignores):
 
@@ -109,5 +101,6 @@ Deploy a new version:
 git pull && docker compose -f docker-compose.prod.yml up -d --build --wait
 ```
 
-In production, keep the `.env.example` values for `MYSQL_HOST`, `REDIS_ADDR`
-and `RABBITMQ_URL`. The prod compose file overrides them.
+`MYSQL_HOST`, `REDIS_ADDR`, `RABBITMQ_URL` and the `JWT_*` paths can keep
+their local values; the prod compose file overrides them with the in-network
+hostnames.

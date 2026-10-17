@@ -27,6 +27,11 @@ import (
 )
 
 func main() {
+	// "server admin grant|revoke <email>" manages admin roles and exits.
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		os.Exit(adminMain(os.Args[2:]))
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)

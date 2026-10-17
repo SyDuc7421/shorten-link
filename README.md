@@ -59,6 +59,12 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
 
    The RabbitMQ management UI is at http://localhost:15672 (guest / guest).
 
+6. To use the admin API (`/api/admin/*`), register a user, then:
+
+   ```bash
+   make admin-grant EMAIL=you@example.com
+   ```
+
 ### Tests
 
 ```bash

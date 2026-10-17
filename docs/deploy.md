@@ -59,6 +59,20 @@ curl https://$DOMAIN/healthz     # {"mysql":"ok","rabbitmq":"ok","redis":"ok"}
 Startup order is handled by compose: MySQL, Redis and RabbitMQ become healthy →
 `migrate` applies `deploy/migrations` and exits → `server` and `worker` start → nginx.
 
+### First admin
+
+Register an account through the app, then give it the admin role from the VPS.
+There is no API for this on purpose: nobody can become admin over HTTP.
+
+```bash
+docker compose -f docker-compose.prod.yml run --rm --no-deps server admin grant you@example.com
+# granted admin to you@example.com
+```
+
+`admin revoke <email>` takes the role away. Both are recorded in `audit_log`
+with `user_id = 0`. The change applies on the user's next request; they do not
+need to log in again.
+
 ## 4. Routine operations
 
 | Task | Command |
@@ -67,6 +81,7 @@ Startup order is handled by compose: MySQL, Redis and RabbitMQ become healthy �
 | Logs | `docker compose -f docker-compose.prod.yml logs -f server worker` |
 | Renew TLS (cron, daily) | `docker compose -f docker-compose.prod.yml run --rm certbot renew --webroot -w /var/www/certbot && docker compose -f docker-compose.prod.yml exec nginx nginx -s reload` |
 | Run migrations only | `docker compose -f docker-compose.prod.yml run --rm migrate` |
+| Grant / revoke admin | `docker compose -f docker-compose.prod.yml run --rm --no-deps server admin grant\|revoke <email>` |
 | MySQL shell | `docker compose -f docker-compose.prod.yml exec mysql mysql -u root -p` |
 | Roll back | `git checkout <previous tag> && docker compose -f docker-compose.prod.yml up -d --build --wait` (down-migrations are manual) |
 

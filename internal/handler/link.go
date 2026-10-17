@@ -17,7 +17,8 @@ import (
 // LinkServicer is the subset of LinkService used by handlers.
 // Defined here (consumer site) so handlers can be tested with a mock.
 type LinkServicer interface {
-	Shorten(ctx context.Context, userID int64, rawURL string, expiresAt *time.Time) (*service.Link, error)
+	Shorten(ctx context.Context, userID int64, rawURL, alias string, expiresAt *time.Time) (*service.Link, error)
+	CheckAlias(ctx context.Context, alias string) (available bool, reason string, err error)
 	Resolve(ctx context.Context, code string) (string, error)
 	Delete(ctx context.Context, code string, userID int64) error
 	ListByUser(ctx context.Context, userID int64, afterID int64, limit int) ([]*service.Link, error)
@@ -43,6 +44,7 @@ func (h *LinkHandler) Register(mux *http.ServeMux, requireAuth func(http.Handler
 	mux.Handle("POST /api/links", requireAuth(http.HandlerFunc(h.Shorten)))
 	mux.Handle("DELETE /api/links/{code}", requireAuth(http.HandlerFunc(h.Delete)))
 	mux.Handle("GET /api/links", requireAuth(http.HandlerFunc(h.List)))
+	mux.Handle("GET /api/links/availability", requireAuth(http.HandlerFunc(h.CheckAlias)))
 }
 
 // Shorten handles POST /api/links
@@ -55,6 +57,7 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 
 	var body struct {
 		URL       string  `json:"url"`
+		Alias     string  `json:"alias"`
 		ExpiresAt *string `json:"expires_at"`
 	}
 	err := json.NewDecoder(r.Body).Decode(&body)
@@ -76,7 +79,7 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &t
 	}
 
-	link, err := h.svc.Shorten(r.Context(), userID, body.URL, expiresAt)
+	link, err := h.svc.Shorten(r.Context(), userID, body.URL, body.Alias, expiresAt)
 	if errors.Is(err, service.ErrInvalidURL) {
 		writeError(w, http.StatusBadRequest, "URL must be a valid http(s) URL with a resolvable host")
 		return
@@ -89,6 +92,14 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "URL targets a forbidden address")
 		return
 	}
+	if errors.Is(err, service.ErrInvalidAlias) {
+		writeError(w, http.StatusBadRequest, "alias must be 3-16 characters of A-Z, a-z, 0-9, _ or -, and not reserved")
+		return
+	}
+	if errors.Is(err, service.ErrCodeTaken) {
+		writeError(w, http.StatusConflict, "alias already taken")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to shorten URL")
 		return
@@ -99,6 +110,32 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		"code":       link.ShortCode,
 		"expires_at": link.ExpiresAt,
 	})
+}
+
+// CheckAlias handles GET /api/links/availability?alias=...
+func (h *LinkHandler) CheckAlias(w http.ResponseWriter, r *http.Request) {
+	if _, ok := ctxkey.UserID(r.Context()); !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	alias := r.URL.Query().Get("alias")
+	if alias == "" {
+		writeError(w, http.StatusBadRequest, "alias query parameter is required")
+		return
+	}
+
+	available, reason, err := h.svc.CheckAlias(r.Context(), alias)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check alias")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, struct {
+		Alias     string `json:"alias"`
+		Available bool   `json:"available"`
+		Reason    string `json:"reason,omitempty"`
+	}{alias, available, reason})
 }
 
 // Redirect handles GET /{code}

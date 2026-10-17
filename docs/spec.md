@@ -14,7 +14,7 @@ A multi-user URL shortener for a small SaaS running on one VPS with Docker
 Compose. Users create short links, anyone can follow them, and owners see how
 many times each link was clicked.
 
-**Out of scope for now:** custom short domains, custom aliases, Kubernetes,
+**Out of scope for now:** custom short domains, Kubernetes,
 WAF, captcha, payments.
 
 ---
@@ -51,6 +51,7 @@ WAF, captcha, payments.
 | FR-L8 | Only the owner can list or delete their links | ✅ |
 | FR-L9 | Daily quota per user (`users.quota_daily`) is enforced on creation | ❌ column exists, never checked |
 | FR-L10 | Abuse handling: block known phishing/malware targets, report and disable links | ❌ |
+| FR-L11 | Optional custom alias (3–16 of `A-Za-z0-9_-`, case-sensitive; `api`, `docs`, `healthz`, `metrics` reserved); taken → `409`. `GET /api/links/availability?alias=` checks it while typing (60/min per IP) | ✅ |
 
 ### 2.3 Analytics
 

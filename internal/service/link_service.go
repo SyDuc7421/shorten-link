@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/april/shorten-link/pkg/idgen"
@@ -29,6 +31,8 @@ const (
 	cacheTTL       = 24 * time.Hour
 	publishTimeout = 2 * time.Second
 	dnsTimeout     = 2 * time.Second
+
+	maxCodeAttempts = 3
 )
 
 // LinkService implements business logic for link shortening.
@@ -44,11 +48,16 @@ func NewLinkService(repo LinkRepository, cache LinkCache, gen *idgen.Generator, 
 	return &LinkService{repo: repo, cache: cache, gen: gen, pub: pub}
 }
 
-// Shorten validates rawURL, generates a short code, persists it, and warms the cache.
-func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL string, expiresAt *time.Time) (*Link, error) {
+// Shorten validates rawURL, persists it under alias (or a generated code when
+// alias is empty), and warms the cache.
+func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias string, expiresAt *time.Time) (*Link, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, ErrInvalidURL
+	}
+
+	if alias != "" && aliasProblem(alias) != "" {
+		return nil, ErrInvalidAlias
 	}
 
 	if expiresAt != nil && !expiresAt.After(time.Now()) {
@@ -59,19 +68,32 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL string, 
 		return nil, err
 	}
 
-	id := s.gen.NextID()
-	code := idgen.ToBase62(id)
-
 	link := &Link{
-		ID:          id,
 		UserID:      userID,
-		ShortCode:   code,
 		OriginalURL: rawURL,
 		ExpiresAt:   expiresAt,
 	}
-	if err := s.repo.Create(ctx, link); err != nil {
+	// A generated code can collide with an existing alias; draw a new ID then.
+	// An alias is the user's choice, so it gets exactly one attempt.
+	attempts := maxCodeAttempts
+	if alias != "" {
+		attempts = 1
+	}
+	for i := 0; ; i++ {
+		link.ID = s.gen.NextID()
+		link.ShortCode = alias
+		if alias == "" {
+			link.ShortCode = idgen.ToBase62(link.ID)
+		}
+		err = s.repo.Create(ctx, link)
+		if !errors.Is(err, ErrCodeTaken) || i+1 >= attempts {
+			break
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("service: shorten: %w", err)
 	}
+	code := link.ShortCode
 
 	ttl := cacheTTL
 	if expiresAt != nil {
@@ -84,6 +106,42 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL string, 
 	s.publishAsync("link.created", map[string]any{"code": code, "user_id": userID})
 
 	return link, nil
+}
+
+// CheckAlias reports whether alias can be used for a new link. reason is
+// "invalid", "reserved" or "taken" when it cannot. The answer can go stale
+// before Shorten runs, which still returns ErrCodeTaken in that case.
+func (s *LinkService) CheckAlias(ctx context.Context, alias string) (available bool, reason string, err error) {
+	if reason := aliasProblem(alias); reason != "" {
+		return false, reason, nil
+	}
+	_, err = s.repo.GetByCode(ctx, alias)
+	if err == nil {
+		return false, "taken", nil
+	}
+	if errors.Is(err, ErrNotFound) {
+		return true, "", nil
+	}
+	return false, "", fmt.Errorf("service: check alias: %w", err)
+}
+
+var aliasPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,16}$`)
+
+// reservedAliases are paths served by other routes, so a link there could
+// never be opened.
+var reservedAliases = []string{"api", "docs", "healthz", "metrics"}
+
+// aliasProblem returns "invalid", "reserved" or "" for a usable alias.
+func aliasProblem(alias string) string {
+	if !aliasPattern.MatchString(alias) {
+		return "invalid"
+	}
+	for _, r := range reservedAliases {
+		if strings.EqualFold(alias, r) {
+			return "reserved"
+		}
+	}
+	return ""
 }
 
 // Resolve returns the original URL for a short code.

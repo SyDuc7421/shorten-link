@@ -15,6 +15,12 @@ var ErrForbiddenURL = errors.New("service: URL targets a forbidden address")
 // ErrInvalidExpiry is returned when expires_at is not in the future.
 var ErrInvalidExpiry = errors.New("service: expires_at must be in the future")
 
+// ErrInvalidAlias is returned when a custom alias has the wrong format or is reserved.
+var ErrInvalidAlias = errors.New("service: alias must be 3-16 characters of A-Z, a-z, 0-9, _ or - and not reserved")
+
+// ErrCodeTaken is returned by repositories when a short code is already in use.
+var ErrCodeTaken = errors.New("service: short code already taken")
+
 // Link is the core domain model for a shortened URL.
 type Link struct {
 	ID          int64

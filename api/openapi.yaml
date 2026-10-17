@@ -62,6 +62,7 @@ paths:
               $ref: "#/components/schemas/ShortenRequest"
             example:
               url: "https://www.example.com/some/very/long/path?with=query"
+              alias: "sale-2026"
               expires_at: "2026-12-31T23:59:59Z"
       responses:
         "201":
@@ -78,6 +79,14 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: The alias is already used by another link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "alias already taken"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -105,6 +114,42 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/links/availability:
+    get:
+      summary: Check whether an alias can be used
+      description: |
+        Meant to be called while the user types an alias. The answer can go
+        stale, so `POST /api/links` may still return 409. Limited to 60
+        requests per minute per IP.
+      tags: [Links]
+      parameters:
+        - name: alias
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "sale-2026"
+      responses:
+        "200":
+          description: Availability of the alias
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasAvailability"
+              examples:
+                available:
+                  value: { alias: "sale-2026", available: true }
+                taken:
+                  value: { alias: "sale-2026", available: false, reason: "taken" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -139,10 +184,10 @@ components:
       name: code
       in: path
       required: true
-      description: Base62-encoded short code (7–8 characters).
+      description: Generated base62 code or a custom alias. Case-sensitive.
       schema:
         type: string
-        pattern: "^[0-9A-Za-z]{7,8}$"
+        pattern: "^[0-9A-Za-z_-]{3,16}$"
       example: aB3xY9z
 
   schemas:
@@ -156,6 +201,14 @@ components:
           format: uri
           description: The original URL to shorten. Must use http or https.
           example: "https://www.example.com/some/very/long/path"
+        alias:
+          type: string
+          pattern: "^[0-9A-Za-z_-]{3,16}$"
+          description: |
+            Optional custom short code, used as-is (case-sensitive). `api`,
+            `docs`, `healthz` and `metrics` are reserved in any case. Omit or
+            leave empty to get a generated code.
+          example: "sale-2026"
         expires_at:
           type: string
           format: date-time
@@ -226,6 +279,19 @@ components:
           nullable: true
           description: Pass as `?cursor=` in the next request. Empty string means no more pages.
           example: "1234567890123456789"
+
+    AliasAvailability:
+      type: object
+      required: [alias, available]
+      properties:
+        alias:
+          type: string
+        available:
+          type: boolean
+        reason:
+          type: string
+          enum: [invalid, reserved, taken]
+          description: Present only when `available` is false.
 
     Error:
       type: object

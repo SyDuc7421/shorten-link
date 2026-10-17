@@ -193,7 +193,7 @@ Every request passes through these, outermost first:
 
 ## 6. How short codes are made
 
-No random strings and no "does this code exist?" loop.
+No random strings: uniqueness comes from the ID itself.
 
 1. `idgen` produces a **Snowflake ID**: a 64-bit number made of
    *milliseconds since 2024-01-01* + *node ID (0–1023)* + *sequence (0–4095)*.
@@ -201,6 +201,12 @@ No random strings and no "does this code exist?" loop.
 
 Codes are therefore unique as long as **every server instance has a different
 `NODE_ID`**. Two instances with the same node ID can generate the same code.
+
+A user can instead pick a **custom alias** (3–16 of `A-Za-z0-9_-`). Aliases
+share the `short_code` column, which compares bytes (`utf8mb4_bin`), so codes
+are case-sensitive. An alias may take a code the generator later produces;
+`Shorten` then gets `ErrCodeTaken` from the unique key and draws a new ID, up
+to 3 attempts.
 
 ---
 

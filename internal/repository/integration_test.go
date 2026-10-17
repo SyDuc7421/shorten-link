@@ -65,6 +65,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"002_create_links.up.sql",
 		"003_create_analytics.up.sql",
 		"004_links_expires_at_datetime.up.sql",
+		"005_links_short_code_case_sensitive.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -363,5 +364,44 @@ func TestLinkMySQL_Create_ExpiryAfter2038(t *testing.T) {
 	}
 	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
 		t.Errorf("expires_at: got %v want %v", got.ExpiresAt, exp)
+	}
+}
+
+func TestLinkMySQL_Create_DuplicateCode(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.Link{ID: 8000, UserID: 8, ShortCode: "dup-code", OriginalURL: "https://a.com"}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	err := repo.Create(ctx, &service.Link{ID: 8001, UserID: 9, ShortCode: "dup-code", OriginalURL: "https://b.com"})
+	if !errors.Is(err, service.ErrCodeTaken) {
+		t.Errorf("want ErrCodeTaken, got %v", err)
+	}
+}
+
+func TestLinkMySQL_ShortCodeIsCaseSensitive(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	if err := repo.Create(ctx, &service.Link{ID: 9000, UserID: 9, ShortCode: "Sale", OriginalURL: "https://upper.com"}); err != nil {
+		t.Fatalf("create Sale: %v", err)
+	}
+	if err := repo.Create(ctx, &service.Link{ID: 9001, UserID: 9, ShortCode: "sale", OriginalURL: "https://lower.com"}); err != nil {
+		t.Fatalf("create sale (differs only in case): %v", err)
+	}
+	for code, want := range map[string]string{"Sale": "https://upper.com", "sale": "https://lower.com"} {
+		got, err := repo.GetByCode(ctx, code)
+		if err != nil {
+			t.Fatalf("GetByCode(%q): %v", code, err)
+		}
+		if got.OriginalURL != want {
+			t.Errorf("GetByCode(%q) = %s, want %s", code, got.OriginalURL, want)
+		}
+	}
+	if _, err := repo.GetByCode(ctx, "SALE"); !errors.Is(err, service.ErrNotFound) {
+		t.Errorf("GetByCode(SALE): want ErrNotFound, got %v", err)
 	}
 }

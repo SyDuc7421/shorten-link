@@ -229,10 +229,19 @@ func newAuthSvc(t *testing.T, userRepo service.UserRepository, tokenCache servic
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey, newMockMailer(), testResetURL)
+	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey, newMockMailer(), mustParseResetURL(t, testResetURL))
 }
 
 const testResetURL = "https://app.example.com/reset-password"
+
+func mustParseResetURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := service.ParseResetURL(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
 
 // --- mock mailer ---
 
@@ -280,7 +289,7 @@ func newAuthSvcWithMailer(t *testing.T, users *mockUserRepo, tokens *mockTokenCa
 		t.Fatal(err)
 	}
 	mailer := newMockMailer()
-	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, testResetURL), mailer
+	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, mustParseResetURL(t, testResetURL)), mailer
 }
 
 // tokenFromLink extracts ?token= from a mailed reset link.
@@ -705,5 +714,29 @@ func TestRequestPasswordReset_StoreFailureReleasesSlot(t *testing.T) {
 	}
 	if len(tokens.released) != 1 {
 		t.Errorf("slot released %d times, want 1", len(tokens.released))
+	}
+}
+
+func TestParseResetURL(t *testing.T) {
+	for _, ok := range []string{
+		"https://app.example.com/reset-password",
+		"http://localhost:3000/reset-password",
+	} {
+		if _, err := service.ParseResetURL(ok); err != nil {
+			t.Errorf("ParseResetURL(%q): unexpected error %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"",
+		"example.com/reset",       // no scheme: mailed as an unclickable link
+		"/reset-password",         // relative
+		"ftp://example.com/reset", // not http(s)
+		"https:///reset-password", // no host
+		"https://app.example.com/reset?token=fixed", // would be overwritten silently
+		"://bad",
+	} {
+		if _, err := service.ParseResetURL(bad); err == nil {
+			t.Errorf("ParseResetURL(%q): want error", bad)
+		}
 	}
 }

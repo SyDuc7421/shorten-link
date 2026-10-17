@@ -21,10 +21,11 @@ exits and Docker restarts it.
 | 5 | `messaging.NewPublisher` tries to connect to RabbitMQ | **not fatal**: it keeps retrying in the background |
 | 6 | `cfg.LoadRSAKeys` reads the JWT key pair | fatal |
 | 7 | `idgen.NewGenerator(cfg.NodeID)` | fatal if `NODE_ID` is outside 0–1023 |
-| 8 | Repositories → services → handlers are constructed. The mailer is SMTP when `SMTP_HOST` is set, otherwise log-only (a warning says so) | — |
-| 9 | Routes are registered on one `http.ServeMux` | — |
-| 10 | The mux is wrapped in rate limits, then in the middleware chain | — |
-| 11 | `ListenAndServe` starts in a goroutine | fatal |
+| 8 | `PASSWORD_RESET_URL` is parsed and checked. The mailer is SMTP when `SMTP_HOST` is set, otherwise log-only, which is allowed only when the reset URL is on localhost | fatal |
+| 9 | Repositories → services → handlers are constructed | — |
+| 10 | Routes are registered on one `http.ServeMux` | — |
+| 11 | The mux is wrapped in rate limits, then in the middleware chain | — |
+| 12 | `ListenAndServe` starts in a goroutine | fatal |
 
 RabbitMQ is the only dependency the server can start without. Redirects and link
 creation must keep working when the click pipeline is down. Click counting is

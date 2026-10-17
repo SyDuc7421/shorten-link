@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -79,7 +81,15 @@ func main() {
 
 	// services
 	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
-	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, newMailer(cfg, log), cfg.PasswordResetURL)
+	resetURL, err := service.ParseResetURL(cfg.PasswordResetURL)
+	if err != nil {
+		log.Fatal("invalid config", zap.Error(err))
+	}
+	mailer, err := newMailer(cfg, resetURL, log)
+	if err != nil {
+		log.Fatal("invalid config", zap.Error(err))
+	}
+	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mailer, resetURL)
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)
@@ -180,12 +190,17 @@ func withRateLimits(mux http.Handler, rdb *redis.Client) http.Handler {
 	})
 }
 
-// newMailer sends through SMTP when SMTP_HOST is set, and otherwise only logs
-// the reset link so local development needs no mail setup.
-func newMailer(cfg *config.Config, log *zap.Logger) service.Mailer {
+// newMailer sends through SMTP when SMTP_HOST is set. Without it, reset links
+// are only logged, which is allowed only while the GUI is on this machine:
+// anywhere else it would put working reset links into production logs and
+// users would never get the mail.
+func newMailer(cfg *config.Config, resetURL *url.URL, log *zap.Logger) (service.Mailer, error) {
 	if cfg.SMTPHost == "" {
+		if !isLocalHost(resetURL.Hostname()) {
+			return nil, fmt.Errorf("SMTP_HOST is required when PASSWORD_RESET_URL (%s) is not on localhost", resetURL)
+		}
 		log.Warn("SMTP_HOST not set: password reset links are logged, not mailed")
-		return mail.NewLogMailer(log)
+		return mail.NewLogMailer(log), nil
 	}
 	return mail.NewSMTPMailer(mail.SMTPConfig{
 		Host:     cfg.SMTPHost,
@@ -193,7 +208,15 @@ func newMailer(cfg *config.Config, log *zap.Logger) service.Mailer {
 		Username: cfg.SMTPUsername,
 		Password: cfg.SMTPPassword,
 		From:     cfg.SMTPFrom,
-	}, log)
+	}, log), nil
+}
+
+func isLocalHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func newServer(port int, h http.Handler) *http.Server {

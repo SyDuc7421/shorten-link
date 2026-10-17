@@ -27,8 +27,8 @@ variable, which is better than failing on the first request.
 | `REDIS_DB` | `0` | | |
 | `RABBITMQ_URL` | | ✔ | `amqp://user:pass@host:5672/` |
 | `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` | | ✔ | PEM files, created by `make keys` |
-| `PASSWORD_RESET_URL` | `http://localhost:3000/reset-password` | | GUI page the reset email links to; `?token=` is appended |
-| `SMTP_HOST` | empty | | SMTP relay. Empty = reset links go to the log, no mail is sent |
+| `PASSWORD_RESET_URL` | `http://localhost:3000/reset-password` | | GUI page the reset email links to; `?token=` is appended. Must be an absolute http(s) URL with no query; checked at startup |
+| `SMTP_HOST` | empty | | SMTP relay. Empty = reset links go to the log, no mail is sent. **Only allowed when `PASSWORD_RESET_URL` is on localhost**; otherwise the server refuses to start |
 | `SMTP_PORT` | `587` | | |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | | No auth when the username is empty |
 | `SMTP_FROM` | `no-reply@localhost` | | Sender address |

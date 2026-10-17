@@ -22,7 +22,7 @@ Edit `.env`:
 | `REDIS_PASSWORD`, `RABBITMQ_PASSWORD` | Long random values |
 | `NODE_ID` | `1` (must differ per server instance if you ever run more than one) |
 | `PASSWORD_RESET_URL` | `https://<your GUI>/reset-password` (the page the reset email links to) |
-| `SMTP_HOST`, `SMTP_PORT` | Your provider's SMTP relay, usually port `587` (STARTTLS). **If left empty, reset links are only written to the server log and users never get the email** |
+| `SMTP_HOST`, `SMTP_PORT` | Your provider's SMTP relay, usually port `587` (STARTTLS). Required in production: with it empty the server refuses to start unless `PASSWORD_RESET_URL` is on localhost |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | SMTP credentials from the provider |
 | `SMTP_FROM` | A sender address your provider allows, e.g. `no-reply@<DOMAIN>`. Set up SPF/DKIM for that domain or mail lands in spam |
 

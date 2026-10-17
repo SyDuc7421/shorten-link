@@ -56,7 +56,7 @@ type AuthService struct {
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 	mailer     Mailer
-	resetURL   string // GUI page; ?token= is appended
+	resetURL   *url.URL // GUI page; ?token= is appended. From ParseResetURL
 }
 
 // NewAuthService constructs an AuthService.
@@ -67,7 +67,7 @@ func NewAuthService(
 	privateKey *rsa.PrivateKey,
 	publicKey *rsa.PublicKey,
 	mailer Mailer,
-	resetURL string,
+	resetURL *url.URL,
 ) *AuthService {
 	return &AuthService{
 		users:      users,
@@ -83,8 +83,8 @@ func NewAuthService(
 // Register creates a new user and returns a token pair.
 func (s *AuthService) Register(ctx context.Context, email, password string) (*TokenPair, error) {
 	email = normalizeEmail(email)
-	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
-		return nil, ErrWeakPassword
+	if err := validatePassword(password); err != nil {
+		return nil, err
 	}
 
 	if _, err := s.users.GetByEmail(ctx, email); err == nil {
@@ -223,19 +223,15 @@ func (s *AuthService) sendResetLink(ctx context.Context, email string) error {
 		return fmt.Errorf("service: store reset token: %w", err)
 	}
 
-	link, err := s.resetLink(token)
-	if err != nil {
-		return err
-	}
-	return s.mailer.SendPasswordReset(ctx, email, link)
+	return s.mailer.SendPasswordReset(ctx, email, s.resetLink(token))
 }
 
 // ResetPassword sets a new password using a token from RequestPasswordReset
 // and revokes every refresh token of the user. The password is checked before
 // the token is consumed, so a weak password does not burn the link.
 func (s *AuthService) ResetPassword(ctx context.Context, token, password string) error {
-	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
-		return ErrWeakPassword
+	if err := validatePassword(password); err != nil {
+		return err
 	}
 
 	userID, err := s.tokens.ConsumePasswordReset(ctx, hashResetToken(token))
@@ -297,15 +293,35 @@ func hashResetToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *AuthService) resetLink(token string) (string, error) {
-	u, err := url.Parse(s.resetURL)
+func (s *AuthService) resetLink(token string) string {
+	u := *s.resetURL
+	u.RawQuery = url.Values{"token": {token}}.Encode()
+	return u.String()
+}
+
+// ParseResetURL checks PASSWORD_RESET_URL once at startup: an absolute http(s)
+// URL with a host and no query of its own. A value such as "example.com/reset"
+// would otherwise be mailed as a link nobody can click.
+func ParseResetURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("service: parse reset URL: %w", err)
+		return nil, fmt.Errorf("PASSWORD_RESET_URL: %w", err)
 	}
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
-	return u.String(), nil
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("PASSWORD_RESET_URL %q must be an absolute http(s) URL", raw)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("PASSWORD_RESET_URL %q must not have a query or fragment; ?token= is appended", raw)
+	}
+	return u, nil
+}
+
+// validatePassword is the one password rule, shared by registration and reset.
+func validatePassword(password string) error {
+	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
+		return ErrWeakPassword
+	}
+	return nil
 }
 
 // runAsync runs work in the background with its own timeout, which bounds how

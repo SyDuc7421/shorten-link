@@ -61,6 +61,11 @@ type TokenCache interface {
 	AcquireResetCooldown(ctx context.Context, email string, ttl time.Duration) (bool, error)
 }
 
+// Mailer sends account emails, defined at the consumer site. Implemented by internal/mail.
+type Mailer interface {
+	SendPasswordReset(ctx context.Context, to, link string) error
+}
+
 // TokenPair holds an access + refresh token pair returned on login/register/refresh.
 type TokenPair struct {
 	AccessToken  string

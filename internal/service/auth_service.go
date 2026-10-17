@@ -2,9 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +29,10 @@ const (
 	lockoutTTL      = 15 * time.Minute
 	minPasswordLen  = 8
 	maxPasswordLen  = 72 // bcrypt input limit
+
+	resetTokenTTL   = 30 * time.Minute
+	resetCooldown   = time.Minute
+	mailSendTimeout = 10 * time.Second
 )
 
 // dummyHash is compared against when the email is unknown so that login
@@ -41,6 +50,8 @@ type AuthService struct {
 	gen        *idgen.Generator
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
+	mailer     Mailer
+	resetURL   string // GUI page; ?token= is appended
 }
 
 // NewAuthService constructs an AuthService.
@@ -50,6 +61,8 @@ func NewAuthService(
 	gen *idgen.Generator,
 	privateKey *rsa.PrivateKey,
 	publicKey *rsa.PublicKey,
+	mailer Mailer,
+	resetURL string,
 ) *AuthService {
 	return &AuthService{
 		users:      users,
@@ -57,6 +70,8 @@ func NewAuthService(
 		gen:        gen,
 		privateKey: privateKey,
 		publicKey:  publicKey,
+		mailer:     mailer,
+		resetURL:   resetURL,
 	}
 }
 
@@ -147,6 +162,120 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 	}
 
 	return s.issueTokenPair(ctx, userID)
+}
+
+// RequestPasswordReset mails a single-use reset link if email belongs to a
+// user. It returns nil for unknown emails too, so callers cannot tell them
+// apart; only storage failures are errors. At most one mail per address is
+// sent per resetCooldown.
+func (s *AuthService) RequestPasswordReset(ctx context.Context, email string) error {
+	email = normalizeEmail(email)
+
+	user, err := s.users.GetByEmail(ctx, email)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("service: reset lookup: %w", err)
+	}
+
+	ok, err := s.tokens.AcquireResetCooldown(ctx, email, resetCooldown)
+	if err != nil {
+		return fmt.Errorf("service: reset cooldown: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+
+	token, err := newResetToken()
+	if err != nil {
+		return fmt.Errorf("service: reset token: %w", err)
+	}
+	if err := s.tokens.StorePasswordReset(ctx, hashResetToken(token), user.ID, resetTokenTTL); err != nil {
+		return fmt.Errorf("service: store reset token: %w", err)
+	}
+
+	link, err := s.resetLink(token)
+	if err != nil {
+		return err
+	}
+	s.sendAsync(func(ctx context.Context) { s.mailer.SendPasswordReset(ctx, email, link) }) //nolint:errcheck
+	return nil
+}
+
+// ResetPassword sets a new password using a token from RequestPasswordReset
+// and revokes every refresh token of the user. The password is checked before
+// the token is consumed, so a weak password does not burn the link.
+func (s *AuthService) ResetPassword(ctx context.Context, token, password string) error {
+	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
+		return ErrWeakPassword
+	}
+
+	userID, err := s.tokens.ConsumePasswordReset(ctx, hashResetToken(token))
+	if errors.Is(err, ErrNotFound) {
+		return ErrInvalidToken
+	}
+	if err != nil {
+		return fmt.Errorf("service: consume reset token: %w", err)
+	}
+
+	// From here on the token is gone. On failure the user asks for a new link;
+	// restoring the token would let a failing request be retried forever.
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("service: reset load user: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("service: hash password: %w", err)
+	}
+	if err := s.users.UpdatePasswordHash(ctx, userID, string(hash)); err != nil {
+		return fmt.Errorf("service: update password: %w", err)
+	}
+	if err := s.tokens.RevokeAllRefreshTokens(ctx, userID); err != nil {
+		return fmt.Errorf("service: revoke sessions: %w", err)
+	}
+
+	s.tokens.DeleteLockout(ctx, user.Email)   //nolint:errcheck
+	s.tokens.DeletePasswordReset(ctx, userID) //nolint:errcheck
+	return nil
+}
+
+// newResetToken returns 32 random bytes, base64url-encoded without padding.
+func newResetToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// hashResetToken is what is stored, so a copy of Redis cannot be replayed.
+func hashResetToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *AuthService) resetLink(token string) (string, error) {
+	u, err := url.Parse(s.resetURL)
+	if err != nil {
+		return "", fmt.Errorf("service: parse reset URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("token", token)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// sendAsync runs send in the background so that a request for a registered
+// email takes as long as one for an unknown email. The timeout bounds how
+// long the goroutine can live if the mail server stalls.
+func (s *AuthService) sendAsync(send func(ctx context.Context)) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), mailSendTimeout)
+		defer cancel()
+		send(ctx)
+	}()
 }
 
 // issueTokenPair creates and stores a new access + refresh token pair.

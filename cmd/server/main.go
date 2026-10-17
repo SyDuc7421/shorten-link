@@ -16,6 +16,7 @@ import (
 	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/handler"
 	"github.com/april/shorten-link/internal/logger"
+	"github.com/april/shorten-link/internal/mail"
 	"github.com/april/shorten-link/internal/messaging"
 	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/repository"
@@ -78,7 +79,7 @@ func main() {
 
 	// services
 	linkSvc := service.NewLinkService(linkRepo, linkCache, gen, pub)
-	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey)
+	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mail.NewLogMailer(log), "http://localhost:3000/reset-password")
 
 	// handlers
 	linkHandler := handler.NewLinkHandler(linkSvc, cfg.BaseURL)

@@ -4,7 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,7 +154,77 @@ func newAuthSvc(t *testing.T, userRepo service.UserRepository, tokenCache servic
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey)
+	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey, newMockMailer(), testResetURL)
+}
+
+const testResetURL = "https://app.example.com/reset-password"
+
+// --- mock mailer ---
+
+type sentMail struct{ to, link string }
+
+type mockMailer struct{ sent chan sentMail }
+
+func newMockMailer() *mockMailer { return &mockMailer{sent: make(chan sentMail, 10)} }
+
+func (m *mockMailer) SendPasswordReset(_ context.Context, to, link string) error {
+	m.sent <- sentMail{to, link}
+	return nil
+}
+
+// next waits for the next mail sent in the background.
+func (m *mockMailer) next(t *testing.T) sentMail {
+	t.Helper()
+	select {
+	case mail := <-m.sent:
+		return mail
+	case <-time.After(2 * time.Second):
+		t.Fatal("no mail sent")
+		return sentMail{}
+	}
+}
+
+// none checks that no mail is sent within a short grace period.
+func (m *mockMailer) none(t *testing.T) {
+	t.Helper()
+	select {
+	case mail := <-m.sent:
+		t.Fatalf("unexpected mail to %s", mail.to)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func newAuthSvcWithMailer(t *testing.T, users *mockUserRepo, tokens *mockTokenCache) (*service.AuthService, *mockMailer) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, err := idgen.NewGenerator(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailer := newMockMailer()
+	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, testResetURL), mailer
+}
+
+// tokenFromLink extracts ?token= from a mailed reset link.
+func tokenFromLink(t *testing.T, link string) string {
+	t.Helper()
+	u, err := url.Parse(link)
+	if err != nil {
+		t.Fatalf("parse link %q: %v", link, err)
+	}
+	tok := u.Query().Get("token")
+	if tok == "" {
+		t.Fatalf("link %q has no token", link)
+	}
+	return tok
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // --- Register tests ---
@@ -324,5 +398,128 @@ func TestRegister_PasswordTooLongForBcrypt(t *testing.T) {
 	_, err := svc.Register(context.Background(), "a@b.com", string(long))
 	if !errors.Is(err, service.ErrWeakPassword) {
 		t.Errorf("want ErrWeakPassword, got %v", err)
+	}
+}
+
+// --- password reset ---
+
+func TestRequestPasswordReset_UnknownEmail(t *testing.T) {
+	tokens := newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, newMockUserRepo(), tokens)
+
+	if err := svc.RequestPasswordReset(context.Background(), "nobody@x.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mailer.none(t)
+	if len(tokens.resets) != 0 {
+		t.Errorf("stored %d reset tokens for an unknown email", len(tokens.resets))
+	}
+}
+
+func TestRequestPasswordReset_SendsLinkWithHashedToken(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	if _, err := svc.Register(context.Background(), "a@x.com", "secret123"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same normalisation as login: case and surrounding spaces do not matter.
+	if err := svc.RequestPasswordReset(context.Background(), "  A@X.com "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mail := mailer.next(t)
+	if mail.to != "a@x.com" {
+		t.Errorf("mail to %q, want a@x.com", mail.to)
+	}
+	if !strings.HasPrefix(mail.link, testResetURL+"?token=") {
+		t.Errorf("link %q does not start with %s?token=", mail.link, testResetURL)
+	}
+	token := tokenFromLink(t, mail.link)
+	userID, ok := tokens.resets[sha256Hex(token)]
+	if !ok || userID != users.users["a@x.com"].ID {
+		t.Errorf("stored resets %v, want the SHA-256 of the mailed token mapped to the user", tokens.resets)
+	}
+	if _, raw := tokens.resets[token]; raw {
+		t.Error("the raw token must not be stored")
+	}
+}
+
+func TestRequestPasswordReset_Cooldown(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	svc.Register(context.Background(), "a@x.com", "secret123") //nolint:errcheck
+
+	svc.RequestPasswordReset(context.Background(), "a@x.com") //nolint:errcheck
+	first := tokenFromLink(t, mailer.next(t).link)
+	if err := svc.RequestPasswordReset(context.Background(), "a@x.com"); err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	mailer.none(t)
+	if _, ok := tokens.resets[sha256Hex(first)]; !ok || len(tokens.resets) != 1 {
+		t.Errorf("a request during the cooldown must leave the first token alone, resets = %v", tokens.resets)
+	}
+}
+
+// requestResetToken registers email and returns a fresh reset token for it.
+func requestResetToken(t *testing.T, svc *service.AuthService, mailer *mockMailer, email string) string {
+	t.Helper()
+	if _, err := svc.Register(context.Background(), email, "old-password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RequestPasswordReset(context.Background(), email); err != nil {
+		t.Fatal(err)
+	}
+	return tokenFromLink(t, mailer.next(t).link)
+}
+
+func TestResetPassword_WeakPasswordKeepsToken(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+
+	if err := svc.ResetPassword(context.Background(), token, "short"); !errors.Is(err, service.ErrWeakPassword) {
+		t.Fatalf("want ErrWeakPassword, got %v", err)
+	}
+	// The user fixes the password and retries with the same link.
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Errorf("retry with the same link after a weak password: %v", err)
+	}
+}
+
+func TestResetPassword_InvalidToken(t *testing.T) {
+	svc, _ := newAuthSvcWithMailer(t, newMockUserRepo(), newMockTokenCache())
+	if err := svc.ResetPassword(context.Background(), "not-a-real-token", "new-password"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Errorf("want ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestResetPassword_OK(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	svc, mailer := newAuthSvcWithMailer(t, users, tokens)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	userID := users.users["a@x.com"].ID
+	tokens.tokens["lockout:a@x.com"] = 3
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if n := tokens.tokens["lockout:a@x.com"]; n != 0 {
+		t.Errorf("lockout counter = %d after reset, want cleared", n)
+	}
+
+	if _, err := svc.Login(context.Background(), "a@x.com", "new-password"); err != nil {
+		t.Errorf("login with the new password: %v", err)
+	}
+	if _, err := svc.Login(context.Background(), "a@x.com", "old-password"); !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Errorf("login with the old password: want ErrInvalidCredentials, got %v", err)
+	}
+	if len(tokens.revokedFor) != 1 || tokens.revokedFor[0] != userID {
+		t.Errorf("revoked sessions for %v, want [%d]", tokens.revokedFor, userID)
+	}
+	if len(tokens.resetPointerDeletedFor) != 1 || tokens.resetPointerDeletedFor[0] != userID {
+		t.Errorf("reset pointer deleted for %v, want [%d]", tokens.resetPointerDeletedFor, userID)
+	}
+	if err := svc.ResetPassword(context.Background(), token, "another-password"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Errorf("second use of the link: want ErrInvalidToken, got %v", err)
 	}
 }

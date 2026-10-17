@@ -13,7 +13,8 @@ interfaces it declares itself, in `link.go` and `auth.go`:
 | `LinkCache` | `repository.linkRedis` | Cache code → URL for fast redirects |
 | `Publisher` | `messaging.Publisher` (or `NoopPublisher`) | Send events such as clicks |
 | `UserRepository` | `repository.userMySQL` | Store and read users |
-| `TokenCache` | `repository.tokenRedis` | Refresh tokens and login-failure counters |
+| `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
+| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
 
 Because the interfaces live here, service tests use small in-file mocks and
 run without any database.
@@ -137,9 +138,49 @@ Redis with an atomic get-and-delete, and issues a brand-new pair. A refresh
 token therefore works exactly once, even if two requests race with it. A reused
 token is answered with `ErrInvalidToken`, and the user has to log in again.
 
+Every refresh token is also recorded in a per-user index, so
+`RevokeAllRefreshTokens` can end all of a user's sessions at once. A password
+reset uses it.
+
 `ParseAccessToken` is what `middleware.JWTAuth` calls. It accepts only RSA
 signatures, which blocks the classic "change the algorithm to `none`/HMAC"
 attack.
+
+### Password reset
+
+Two steps, matching the two endpoints.
+
+**`RequestPasswordReset(ctx, email)`** always returns `nil` unless storage
+fails, whether or not the email exists, so the API answers the same either way.
+
+1. Normalise the email as login does. Unknown email: stop here.
+2. Take the per-address cooldown. If a mail went to this address in the last
+   minute, stop here. This keeps someone from flooding a victim's inbox.
+3. Generate 32 random bytes (base64url, no padding) and store only their
+   SHA-256, for 30 minutes. Storing a new token invalidates the user's previous
+   one, so only the latest link works.
+4. Build the link (`resetURL` + `?token=`) and send it **in the background**
+   with a 10 s timeout (`sendAsync`). Sending inside the request would make
+   registered emails measurably slower than unknown ones.
+
+**`ResetPassword(ctx, token, password)`**:
+
+1. Check the password length **first**, so a weak password does not use up the
+   link. The user fixes it and submits again.
+2. Consume the token by its hash (atomic, single use). Unknown, expired or used:
+   `ErrInvalidToken`.
+3. Load the user, bcrypt the new password, update the hash.
+4. Revoke every refresh token of the user, then clear the lockout counter and
+   the reset pointer.
+
+If step 3 or 4 fails, the token is already consumed and the user has to request
+a new link. Putting it back would let a failing request be retried forever.
+
+Two limits worth knowing: an access token issued before the reset stays valid
+until it expires (at most 15 minutes), and refresh tokens issued before the
+per-user index existed are not revoked. A request for a registered email also
+does a few more Redis calls than one for an unknown email, a sub-millisecond
+difference.
 
 ## Before you change it
 
@@ -150,9 +191,12 @@ attack.
   wrapped, and map it in the handler.
 - `TestShorten_OK` and the SSRF tests resolve real hostnames such as
   `example.com`, so they need network access.
-- Not built yet: logout, password reset, email verification and revoking all
-  sessions (FR-A8 to FR-A11 in [spec.md](../spec.md)). Refresh tokens are keyed
-  by token, not by user, so "log out everywhere" needs a new index first.
+- Not built yet: logout and email verification (FR-A8, FR-A10 in
+  [spec.md](../spec.md)). Revoking all sessions exists (`RevokeAllRefreshTokens`)
+  but only a password reset triggers it; there is no endpoint for it yet.
+- The password reset tests use `mockMailer`, which records mails on a channel
+  because they are sent from a goroutine. `next` waits for one; `none` checks
+  that nothing arrives within 100 ms.
 - Lockout has two known gaps. The check and the increment are separate steps,
   so parallel login attempts that all pass the check before any increment can
   try more than 5 passwords. And `INCR` and `EXPIRE` are separate Redis calls,

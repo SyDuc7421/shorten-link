@@ -109,7 +109,9 @@ func TestRequireAuth_WithoutUserID_Returns401(t *testing.T) {
 
 type adminCheckerFunc func(userID int64) (bool, error)
 
-func (f adminCheckerFunc) IsActiveAdmin(_ context.Context, userID int64) (bool, error) { return f(userID) }
+func (f adminCheckerFunc) IsActiveAdmin(_ context.Context, userID int64) (bool, error) {
+	return f(userID)
+}
 
 func TestRequireAdmin(t *testing.T) {
 	for _, tc := range []struct {

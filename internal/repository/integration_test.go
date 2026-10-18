@@ -70,6 +70,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"005_links_short_code_case_sensitive.up.sql",
 		"006_admin.up.sql",
 		"007_analytics_daily_primary_key.up.sql",
+		"008_analytics_daily_stat_date_index.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -836,7 +837,7 @@ func TestAnalyticsDaily_UpsertDoesNotBlockNewRowInGap(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		txA.Rollback() //nolint:errcheck // release A so B's goroutine can finish
-		<-done //nolint:errcheck // only waiting for the goroutine to exit
+		<-done         //nolint:errcheck // only waiting for the goroutine to exit
 		t.Fatal("B's insert of a new day row is blocked by A's upsert of a neighbouring row (gap lock): two workers can deadlock")
 	}
 }

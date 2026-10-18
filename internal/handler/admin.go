@@ -409,7 +409,6 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-
 // Stats handles GET /api/admin/stats?days=
 func (h *AdminHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	days := service.DefaultStatsDays

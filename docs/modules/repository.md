@@ -100,9 +100,13 @@ quota), nothing is written and no audit row is added; the methods that return
 live tables; new users and new links per `DATE(created_at)` (UTC, because the
 session time zone is UTC); clicks per `stat_date` from `analytics_daily`; and
 the top 10 links by clicks since `since`. Top links `JOIN links`, so a deleted
-link drops out of the top list while its clicks still count per day. The
-per-day queries scan `users` and `links` by `created_at`, which has no index;
-fine at the current size.
+link drops out of the top list while its clicks still count per day.
+`disabled_links` counts links that are disabled **or** whose owner is, the same
+definition as `ListLinks` `status=disabled`. The per-day queries on `users` and
+`links` add `id >= idgen.MinIDAt(since)`: IDs are time-ordered, so MySQL reads
+a primary-key range instead of the whole table (`created_at` has no index).
+`analytics_daily` is read through `idx_stat_date (stat_date, link_id, clicks)`
+(migration 008).
 
 `audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`
 for a quota change and `code` for link actions; it is `NULL` when there is

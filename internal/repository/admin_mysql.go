@@ -13,6 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 
 	"github.com/april/shorten-link/internal/service"
+	"github.com/april/shorten-link/pkg/idgen"
 )
 
 type adminMySQL struct {
@@ -428,12 +429,15 @@ func (r *adminMySQL) ListAudit(ctx context.Context, f service.AuditFilter) ([]*s
 func (r *adminMySQL) Stats(ctx context.Context, since time.Time) (*service.Stats, error) {
 	st := &service.Stats{}
 
+	// disabled_links uses the same definition as ListLinks status=disabled: the
+	// link or its owner is disabled (both answer 410).
 	const totals = `
 		SELECT (SELECT COUNT(*) FROM users) AS users,
 		       (SELECT COUNT(*) FROM links) AS links,
 		       (SELECT COALESCE(SUM(clicks), 0) FROM links) AS clicks,
 		       (SELECT COUNT(*) FROM users WHERE disabled_at IS NOT NULL) AS disabled_users,
-		       (SELECT COUNT(*) FROM links WHERE disabled_at IS NOT NULL) AS disabled_links`
+		       (SELECT COUNT(*) FROM links l LEFT JOIN users u ON u.id = l.user_id
+		        WHERE l.disabled_at IS NOT NULL OR u.disabled_at IS NOT NULL) AS disabled_links`
 	var t struct {
 		Users         int64 `db:"users"`
 		Links         int64 `db:"links"`
@@ -454,22 +458,28 @@ func (r *adminMySQL) Stats(ctx context.Context, since time.Time) (*service.Stats
 		}
 		return days[d.Unix()]
 	}
+	// users and links have time-ordered snowflake IDs, so "id >= sinceID"
+	// turns the date filter into a primary-key range instead of a full scan;
+	// created_at still decides the exact day. analytics_daily is read through
+	// idx_stat_date (migration 008).
+	sinceID := idgen.MinIDAt(since)
 	for _, part := range []struct {
-		q   string
-		set func(d *service.DayStats, n int64)
+		q    string
+		args []any
+		set  func(d *service.DayStats, n int64)
 	}{
-		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM users WHERE created_at >= ? GROUP BY d`,
-			func(d *service.DayStats, n int64) { d.NewUsers = n }},
-		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM links WHERE created_at >= ? GROUP BY d`,
-			func(d *service.DayStats, n int64) { d.NewLinks = n }},
+		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM users WHERE id >= ? AND created_at >= ? GROUP BY d`,
+			[]any{sinceID, since}, func(d *service.DayStats, n int64) { d.NewUsers = n }},
+		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM links WHERE id >= ? AND created_at >= ? GROUP BY d`,
+			[]any{sinceID, since}, func(d *service.DayStats, n int64) { d.NewLinks = n }},
 		{`SELECT stat_date AS d, SUM(clicks) AS n FROM analytics_daily WHERE stat_date >= ? GROUP BY stat_date`,
-			func(d *service.DayStats, n int64) { d.Clicks = n }},
+			[]any{since}, func(d *service.DayStats, n int64) { d.Clicks = n }},
 	} {
 		var rows []struct {
 			D time.Time `db:"d"`
 			N int64     `db:"n"`
 		}
-		if err := r.db.SelectContext(ctx, &rows, part.q, since); err != nil {
+		if err := r.db.SelectContext(ctx, &rows, part.q, part.args...); err != nil {
 			return nil, fmt.Errorf("repository: stats per day: %w", err)
 		}
 		for _, row := range rows {

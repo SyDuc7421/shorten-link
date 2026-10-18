@@ -800,7 +800,9 @@ paths:
         `days` days ending today (oldest first, zeros where nothing happened),
         and the 10 links with the most clicks in that range. Per-day clicks
         start when the click worker began recording them; earlier clicks are
-        only in the totals.
+        only in the totals. A click is counted on the UTC day the worker
+        records it, so a worker backlog across midnight shifts clicks to the
+        next day.
       tags: [Admin]
       parameters:
         - name: days
@@ -939,7 +941,7 @@ components:
             links: { type: integer }
             clicks: { type: integer }
             disabled_users: { type: integer }
-            disabled_links: { type: integer }
+            disabled_links: { type: integer, description: Links that are disabled or whose owner is disabled }
         daily:
           type: array
           items:

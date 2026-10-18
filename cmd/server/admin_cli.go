@@ -21,8 +21,9 @@ type adminSetter interface {
 	SetAdmin(ctx context.Context, email string, admin bool) (bool, error)
 }
 
-// adminMain runs "server admin ...": it needs only MySQL, not Redis, RabbitMQ
-// or the JWT keys. Returns the process exit code.
+// adminMain runs "server admin ...". It loads the full config (so every
+// required variable, JWT key paths included, must be set, as in the server's
+// own container) but connects only to MySQL. Returns the process exit code.
 func adminMain(args []string) int {
 	cfg, err := config.Load()
 	if err != nil {

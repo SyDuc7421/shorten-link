@@ -12,6 +12,7 @@ import (
 
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
+	"github.com/april/shorten-link/pkg/idgen"
 )
 
 func mustExec(t *testing.T, db *sqlx.DB, q string, args ...any) {
@@ -320,19 +321,26 @@ func TestAdminMySQL_Stats(t *testing.T) {
 	repo := repository.NewAdminMySQL(db)
 	ctx := context.Background()
 
+	// Snowflake IDs matching created_at, as the app generates them: the
+	// per-day queries narrow by id range.
+	now := time.Now()
+	idAt := func(ago time.Duration, n int64) int64 { return idgen.MinIDAt(now.Add(-ago)) + n }
+	u1, u2, u3 := idAt(0, 1), idAt(0, 2), idAt(40*24*time.Hour, 3)
+	lTop, lLow, lOld := idAt(0, 10), idAt(24*time.Hour, 11), idAt(40*24*time.Hour, 12)
+
 	// Users and links: two today (one disabled each), one 40 days ago.
 	mustExec(t, db, `INSERT INTO users (id, email, password_hash, created_at, disabled_at) VALUES
-		(1, 'a@x.com', 'x', UTC_TIMESTAMP(), NULL),
-		(2, 'b@x.com', 'x', UTC_TIMESTAMP(), UTC_TIMESTAMP()),
-		(3, 'c@x.com', 'x', UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`)
+		(?, 'a@x.com', 'x', UTC_TIMESTAMP(), NULL),
+		(?, 'b@x.com', 'x', UTC_TIMESTAMP(), UTC_TIMESTAMP()),
+		(?, 'c@x.com', 'x', UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`, u1, u2, u3)
 	mustExec(t, db, `INSERT INTO links (id, user_id, short_code, original_url, clicks, created_at, disabled_at) VALUES
-		(10, 1, 'top', 'https://e.com', 7, UTC_TIMESTAMP(), NULL),
-		(11, 1, 'low', 'https://e.com', 2, UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP()),
-		(12, 3, 'old', 'https://e.com', 1, UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`)
+		(?, ?, 'top', 'https://e.com', 7, UTC_TIMESTAMP(), NULL),
+		(?, ?, 'low', 'https://e.com', 2, UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP()),
+		(?, ?, 'old', 'https://e.com', 1, UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`, lTop, u1, lLow, u1, lOld, u3)
 	// Link 99 was deleted: its clicks count per day but it cannot be a top link.
 	mustExec(t, db, `INSERT INTO analytics_daily (link_id, stat_date, clicks) VALUES
-		(10, UTC_DATE(), 5), (10, UTC_DATE() - INTERVAL 1 DAY, 2), (11, UTC_DATE() - INTERVAL 1 DAY, 2),
-		(99, UTC_DATE(), 100), (12, UTC_DATE() - INTERVAL 40 DAY, 1)`)
+		(?, UTC_DATE(), 5), (?, UTC_DATE() - INTERVAL 1 DAY, 2), (?, UTC_DATE() - INTERVAL 1 DAY, 2),
+		(99, UTC_DATE(), 100), (?, UTC_DATE() - INTERVAL 40 DAY, 1)`, lTop, lTop, lLow, lOld)
 
 	var today time.Time
 	if err := db.GetContext(ctx, &today, `SELECT UTC_DATE()`); err != nil {
@@ -363,5 +371,31 @@ func TestAdminMySQL_Stats(t *testing.T) {
 	}
 	if len(st.TopLinks) != 2 || st.TopLinks[0] != (service.TopLink{Code: "top", Clicks: 7}) || st.TopLinks[1].Code != "low" {
 		t.Errorf("top links: got %+v", st.TopLinks)
+	}
+}
+
+func TestAdminMySQL_Stats_DisabledLinksIncludeDisabledOwners(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewAdminMySQL(db)
+
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash, disabled_at) VALUES
+		(1, 'ok@x.com', 'x', NULL), (2, 'off@x.com', 'x', UTC_TIMESTAMP())`)
+	mustExec(t, db, `INSERT INTO links (id, user_id, short_code, original_url, disabled_at) VALUES
+		(10, 1, 'live', 'https://e.com', NULL),
+		(11, 1, 'off', 'https://e.com', UTC_TIMESTAMP()),
+		(12, 2, 'own1', 'https://e.com', NULL),
+		(13, 2, 'own2', 'https://e.com', UTC_TIMESTAMP())`)
+
+	st, err := repo.Stats(context.Background(), time.Now().UTC().Truncate(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same definition as ListLinks status=disabled: the link or its owner is disabled.
+	disabled, err := repo.ListLinks(context.Background(), service.LinkFilter{Status: "disabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Totals.DisabledLinks != 3 || int64(len(disabled)) != st.Totals.DisabledLinks {
+		t.Errorf("want 3 disabled links matching the list, got total %d, list %d", st.Totals.DisabledLinks, len(disabled))
 	}
 }

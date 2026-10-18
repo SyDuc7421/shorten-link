@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -174,11 +176,24 @@ func (r *linkMySQL) BatchUpdateClicks(ctx context.Context, counts map[string]int
 	if err != nil {
 		return fmt.Errorf("repository: batch update clicks begin tx: %w", err)
 	}
-	const q = `UPDATE links SET clicks = clicks + ? WHERE short_code = ?`
-	for code, delta := range counts {
-		if _, err := tx.ExecContext(ctx, q, delta, code); err != nil {
+	const updateTotal = `UPDATE links SET clicks = clicks + ? WHERE short_code = ?`
+	// One row per link per UTC day. A code with no link row (deleted since the
+	// click) selects nothing, so it is skipped without an error.
+	const upsertDaily = `
+		INSERT INTO analytics_daily (link_id, stat_date, clicks)
+		SELECT id, UTC_DATE(), ? FROM links WHERE short_code = ?
+		ON DUPLICATE KEY UPDATE analytics_daily.clicks = analytics_daily.clicks + ?`
+	// Sorted, so concurrent workers lock rows in the same order and cannot
+	// deadlock each other.
+	for _, code := range slices.Sorted(maps.Keys(counts)) {
+		delta := counts[code]
+		if _, err := tx.ExecContext(ctx, updateTotal, delta, code); err != nil {
 			tx.Rollback() //nolint:errcheck
 			return fmt.Errorf("repository: batch update clicks %q: %w", code, err)
+		}
+		if _, err := tx.ExecContext(ctx, upsertDaily, delta, code, delta); err != nil {
+			tx.Rollback() //nolint:errcheck
+			return fmt.Errorf("repository: batch update daily clicks %q: %w", code, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {

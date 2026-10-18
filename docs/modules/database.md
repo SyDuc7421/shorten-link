@@ -44,8 +44,16 @@ so running it twice does nothing the second time.
 
 ### `analytics_daily`
 
-Created by migration 003 for per-day click history. Nothing reads or writes it
-yet.
+Clicks per link per UTC day; the primary key is `(link_id, stat_date)` (since
+007). The worker
+adds to it in the same transaction as `links.clicks`; `/api/admin/stats` reads
+it. There is no foreign key, so rows of a deleted link stay (they still count
+in daily totals). Days before this table was first written have no rows.
+
+**The day is when the worker writes the batch**, not when the click
+happened: click events carry only the code. Normally that is a second or two
+later, but if the worker is down or backlogged across midnight UTC, those
+clicks land on the next day (a dip, then a spike, in the per-day series).
 
 ### `audit_log`
 
@@ -65,10 +73,12 @@ code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 | 004 | `links.expires_at` → `DATETIME` | `TIMESTAMP` cannot store dates after 2038-01-19, so long expiries failed |
 | 005 | `links.short_code` → `utf8mb4_bin` | The default collation ignores letter case: `/Sale` and `/sale` hit the same row, and generated codes differing only in case collided |
 | 006 | `users.role`, `users.disabled_at`, `links.disabled_at`, index `audit_log(created_at)` | Admin site: who may administer, and disabling without deleting |
+| 007 | `analytics_daily`: primary key `(link_id, stat_date)`, surrogate `id` dropped | With a secondary unique key, the worker's upsert took gap locks and two workers could deadlock |
+| 008 | `analytics_daily`: index `idx_stat_date (stat_date, link_id, clicks)` | Admin stats read by date range; the primary key starts with `link_id` |
 
 ## Writing a migration
 
-1. Use the next number: `007_what_it_does.up.sql` and `.down.sql`.
+1. Use the next number: `009_what_it_does.up.sql` and `.down.sql`.
 2. Start the file with a comment that says **why**, not only what. The history
    table above is built from those comments.
 3. Write the `down` file even if you hope never to run it. If it can fail on

@@ -19,6 +19,8 @@ type fakeAdminRepo struct {
 	disableErr    error
 	roleEmail     string
 	role          string
+	stats         *service.Stats
+	statsSince    time.Time
 }
 
 func newFakeAdminRepo() *fakeAdminRepo {
@@ -248,5 +250,66 @@ func TestSetAdmin(t *testing.T) {
 	svc.SetAdmin(context.Background(), "a@x.com", false) //nolint:errcheck
 	if repo.role != service.RoleUser {
 		t.Errorf("revoke: want role user, got %q", repo.role)
+	}
+}
+
+func (f *fakeAdminRepo) Stats(_ context.Context, since time.Time) (*service.Stats, error) {
+	f.statsSince = since
+	if f.stats == nil {
+		return &service.Stats{}, nil
+	}
+	return f.stats, nil
+}
+
+func TestStats_DaysRange(t *testing.T) {
+	svc := newAdminSvc(newFakeAdminRepo(), newMockCache(), newMockTokenCache())
+	for _, d := range []int{0, -1, 91} {
+		if _, err := svc.Stats(context.Background(), d); !errors.Is(err, service.ErrInvalidDays) {
+			t.Errorf("days %d: want ErrInvalidDays, got %v", d, err)
+		}
+	}
+	for _, d := range []int{1, 90} {
+		st, err := svc.Stats(context.Background(), d)
+		if err != nil || len(st.Daily) != d {
+			t.Errorf("days %d: want %d entries, got %v, %v", d, d, st, err)
+		}
+	}
+}
+
+func TestStats_ZeroFillsAndOrders(t *testing.T) {
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	repo := newFakeAdminRepo()
+	repo.stats = &service.Stats{
+		Totals: service.StatsTotals{Users: 9},
+		Daily: []service.DayStats{
+			{Date: today, Clicks: 4},
+			{Date: today.AddDate(0, 0, -2), NewUsers: 1},
+		},
+		TopLinks: []service.TopLink{{Code: "a", Clicks: 4}},
+	}
+	svc := newAdminSvc(repo, newMockCache(), newMockTokenCache())
+
+	st, err := svc.Stats(context.Background(), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repo.statsSince.Equal(today.AddDate(0, 0, -2)) {
+		t.Errorf("since: want %v, got %v", today.AddDate(0, 0, -2), repo.statsSince)
+	}
+	want := []service.DayStats{
+		{Date: today.AddDate(0, 0, -2), NewUsers: 1},
+		{Date: today.AddDate(0, 0, -1)},
+		{Date: today, Clicks: 4},
+	}
+	if len(st.Daily) != 3 {
+		t.Fatalf("want 3 days, got %d", len(st.Daily))
+	}
+	for i := range want {
+		if !st.Daily[i].Date.Equal(want[i].Date) || st.Daily[i].NewUsers != want[i].NewUsers || st.Daily[i].Clicks != want[i].Clicks {
+			t.Errorf("day %d: want %+v, got %+v", i, want[i], st.Daily[i])
+		}
+	}
+	if st.Totals.Users != 9 || len(st.TopLinks) != 1 {
+		t.Errorf("totals/top not passed through: %+v", st)
 	}
 }

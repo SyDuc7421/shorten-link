@@ -792,6 +792,37 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/admin/stats:
+    get:
+      summary: Dashboard numbers
+      description: |
+        Totals over the whole database, one entry per UTC day for the last
+        `days` days ending today (oldest first, zeros where nothing happened),
+        and the 10 links with the most clicks in that range. Per-day clicks
+        start when the click worker began recording them; earlier clicks are
+        only in the totals. A click is counted on the UTC day the worker
+        records it, so a worker backlog across midnight shifts clicks to the
+        next day.
+      tags: [Admin]
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 90, default: 30 }
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminStats" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
 
   securitySchemes:
@@ -899,6 +930,34 @@ components:
           type: object
           description: "`reason` when given; `before`/`after` for quota; `code` for links."
         created_at: { type: string, format: date-time }
+
+    AdminStats:
+      type: object
+      properties:
+        totals:
+          type: object
+          properties:
+            users: { type: integer }
+            links: { type: integer }
+            clicks: { type: integer }
+            disabled_users: { type: integer }
+            disabled_links: { type: integer, description: Links that are disabled or whose owner is disabled }
+        daily:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string, format: date, example: "2026-10-18" }
+              new_users: { type: integer }
+              new_links: { type: integer }
+              clicks: { type: integer }
+        top_links:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { type: string }
+              clicks: { type: integer, description: Clicks within the range }
 
     ShortenRequest:
       type: object

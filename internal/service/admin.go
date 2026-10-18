@@ -16,6 +16,15 @@ var ErrInvalidQuota = errors.New("service: quota_daily must be 0-100000")
 // ErrReasonTooLong is returned when an admin's reason exceeds MaxReasonBytes.
 var ErrReasonTooLong = errors.New("service: reason must be at most 500 bytes")
 
+// ErrInvalidDays is returned when the stats range is outside 1..MaxStatsDays.
+var ErrInvalidDays = errors.New("service: days must be 1-90")
+
+const (
+	MaxStatsDays     = 90
+	DefaultStatsDays = 30
+	TopLinksLimit    = 10
+)
+
 const (
 	MaxQuotaDaily  = 100000
 	MaxReasonBytes = 500
@@ -84,6 +93,30 @@ type AuditFilter struct {
 	BeforeID     int64
 }
 
+// StatsTotals are counts over the whole database.
+type StatsTotals struct {
+	Users, Links, Clicks, DisabledUsers, DisabledLinks int64
+}
+
+// DayStats is activity on one UTC day.
+type DayStats struct {
+	Date                       time.Time // UTC midnight
+	NewUsers, NewLinks, Clicks int64
+}
+
+// TopLink is a link and its clicks within the stats range.
+type TopLink struct {
+	Code   string
+	Clicks int64
+}
+
+// Stats is what the admin dashboard shows.
+type Stats struct {
+	Totals   StatsTotals
+	Daily    []DayStats // repository: only days with activity; AdminService: every day, oldest first
+	TopLinks []TopLink
+}
+
 // AdminRepository is the persistence interface for admin operations. Every
 // write runs in one transaction with its audit_log row; changed=false means the
 // row was already in that state and nothing (no audit row) was written.
@@ -99,4 +132,7 @@ type AdminRepository interface {
 	DeleteLink(ctx context.Context, actorID int64, code string, reason string) error
 	ListAudit(ctx context.Context, f AuditFilter) ([]*AuditEntry, error)
 	SetRole(ctx context.Context, actorID int64, email, role string) (changed bool, err error)
+	// Stats returns totals, per-day rows on or after since (UTC midnight) and
+	// the top links by clicks in that range.
+	Stats(ctx context.Context, since time.Time) (*Stats, error)
 }

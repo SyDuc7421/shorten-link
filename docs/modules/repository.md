@@ -50,9 +50,16 @@ translate them:
   `id >= sinceID` in one query. `idx_user_id` stores `(user_id, id)`, so the
   count is an index range scan. An unknown user gives `ErrNotFound`.
 - **`BatchUpdateClicks`** is used by the worker. It takes a map of code →
-  number of new clicks and runs one `UPDATE links SET clicks = clicks + ?` per
-  code inside a single transaction. Either the whole batch is counted or none
-  of it is.
+  number of new clicks and, inside a single transaction, for each code in
+  sorted order: `UPDATE links SET clicks = clicks + ?`, then an upsert into
+  `analytics_daily` for today (UTC) keyed on `(link_id, stat_date)`. Either the
+  whole batch is counted, totals and per-day rows together, or none of it is.
+  A code whose link was deleted since the click updates nothing and is
+  skipped. Sorting the codes means concurrent workers take row locks in the
+  same order and cannot deadlock. That relies on `(link_id, stat_date)` being
+  the **primary key** (migration 007): a duplicate primary key locks only the
+  row, while a duplicate secondary unique key also locks the gap before it,
+  which can block another worker's new row and close a cycle.
 
 ## Users in MySQL (`user_mysql.go`)
 
@@ -88,6 +95,18 @@ When the row is already in the requested state (same disabled flag, role or
 quota), nothing is written and no audit row is added; the methods that return
 `changed` report `false`. Unknown IDs, codes or emails give
 `ErrNotFound`.
+
+**`Stats(since)`** is read-only: totals from `COUNT(*)`/`SUM(clicks)` on the
+live tables; new users and new links per `DATE(created_at)` (UTC, because the
+session time zone is UTC); clicks per `stat_date` from `analytics_daily`; and
+the top 10 links by clicks since `since`. Top links `JOIN links`, so a deleted
+link drops out of the top list while its clicks still count per day.
+`disabled_links` counts links that are disabled **or** whose owner is, the same
+definition as `ListLinks` `status=disabled`. The per-day queries on `users` and
+`links` add `id >= idgen.MinIDAt(since)`: IDs are time-ordered, so MySQL reads
+a primary-key range instead of the whole table (`created_at` has no index).
+`analytics_daily` is read through `idx_stat_date (stat_date, link_id, clicks)`
+(migration 008).
 
 `audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`
 for a quota change and `code` for link actions; it is `NULL` when there is

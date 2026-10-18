@@ -94,7 +94,8 @@ RabbitMQ queue "clicks"
 worker ClickConsumer
   ├─ collects up to 500 events, or whatever arrived in 2 seconds
   ├─ sums them per code: {"R7dwPCPmUa": 37, "Kp3xQ9aZ1b": 4}
-  ├─ one MySQL transaction: UPDATE links SET clicks = clicks + ? …
+  ├─ one MySQL transaction, codes in sorted order:
+  │    UPDATE links SET clicks = clicks + ?   and   upsert analytics_daily (today, UTC)
   ├─ success ──▶ ack all messages
   └─ failure ──▶ retry once; second failure ──▶ dead-letter queue "clicks.dlq"
                                                 (logged by DLQConsumer)
@@ -177,6 +178,7 @@ Every request passes through these, outermost first:
 | POST | `/api/admin/links/{code}/disable`, `/enable` | admin | Disable or enable a link (disabled → 410) |
 | DELETE | `/api/admin/links/{code}` | admin | Delete any link |
 | GET | `/api/admin/audit?actor_id=&resource_type=&cursor=` | admin | Admin action log |
+| GET | `/api/admin/stats?days=` | admin | Totals, per-day new users/links/clicks, top links (1–90 days) |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 
@@ -247,10 +249,10 @@ to 3 attempts.
 
 | Table | Used? | Contents |
 |---|---|---|
-| `users` | ✔ | id, email (unique), password_hash, plan, quota_daily |
-| `links` | ✔ | id, user_id, short_code (unique), original_url, clicks, expires_at |
-| `analytics_daily` | not yet | Per-day click counts (planned) |
-| `audit_log` | not yet | Planned audit trail |
+| `users` | ✔ | id, email (unique), password_hash, plan, role, quota_daily, disabled_at |
+| `links` | ✔ | id, user_id, short_code (unique), original_url, clicks, expires_at, disabled_at |
+| `analytics_daily` | ✔ | Clicks per link per UTC day, primary key (link_id, stat_date); written by the worker, read by `/api/admin/stats` |
+| `audit_log` | ✔ | One row per admin action (who, what, target, JSON metadata) |
 
 ### Redis keys
 

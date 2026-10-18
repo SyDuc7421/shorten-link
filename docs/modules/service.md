@@ -46,6 +46,7 @@ service wraps them with context (`fmt.Errorf("service: shorten: %w", err)`).
 | `ErrSelfDisable` | An admin tried to disable their own account |
 | `ErrInvalidQuota` | `quota_daily` outside 0–100000 |
 | `ErrReasonTooLong` | An admin's reason is longer than 500 bytes |
+| `ErrInvalidDays` | Stats range outside 1–90 days |
 
 ## Links (`link_service.go`)
 
@@ -271,6 +272,11 @@ cache consistent with the database.
   `sl:<code>`.
 - **`GetUser`** adds links created today (UTC, via `idgen.MinIDAt`) and total
   clicks.
+- **`Stats(days)`** (1–90) asks the repository for totals, the per-day rows
+  since UTC midnight `days-1` days ago, and the top 10 links in that range.
+  The repository returns only days with activity; the service fills in the
+  missing days with zeros and returns exactly `days` entries, oldest first,
+  ending today.
 - **`SetAdmin(email, admin)`** is for the CLI: it lower-cases the email and
   sets the role with actor `0` (system).
 

@@ -58,8 +58,8 @@ WAF, captcha, payments.
 | ID | Requirement | Status |
 |---|---|---|
 | FR-S1 | Every successful redirect is counted on the link (`clicks`) | ⚠️ best effort: lost if RabbitMQ is down or a batch is dead-lettered |
-| FR-S2 | Per-day click history (`analytics_daily`) | ❌ table exists, worker never writes it |
-| FR-S3 | `GET /api/links/{code}/stats` and `/stats/summary` | ❌ planned (roadmap phase 4) |
+| FR-S2 | Per-day click history (`analytics_daily`) | ✅ written by the worker with each batch (UTC day); no history before it shipped |
+| FR-S3 | `GET /api/links/{code}/stats` and `/stats/summary` | ⚠️ admins get service-wide stats (`/api/admin/stats`); no per-link stats for owners yet |
 
 ### 2.4 Administration
 
@@ -72,7 +72,7 @@ WAF, captcha, payments.
 | FR-ADM5 | Disabling a user blocks login, ends sessions, refuses link creation and stops all their links | ✅ the access token keeps working up to 15 min for listing and deleting their own links |
 | FR-ADM6 | Admins disable, enable and delete any link; a disabled link answers 410 | ✅ |
 | FR-ADM7 | Admins read the audit log | ✅ |
-| FR-ADM8 | Dashboard numbers (totals, per-day series) | ❌ planned ([admin design](superpowers/specs/2026-10-18-admin-design.md), plan 2) |
+| FR-ADM8 | Dashboard numbers (totals, per-day series) | ✅ `GET /api/admin/stats`, up to 90 days |
 | FR-ADM9 | Admin web UI | ❌ planned (plan 3, `shorten-link-gui`) |
 
 ### 2.5 Operations endpoints
@@ -126,7 +126,7 @@ WAF, captcha, payments.
 | NFR-R5 | Publisher recovers from a dropped RabbitMQ connection | ✅ background reconnect; server also starts without RabbitMQ |
 | NFR-R6 | Dead-lettered clicks can be replayed | ❌ DLQ consumer logs and acks |
 | NFR-R7 | Lockout counter can never become permanent | ⚠️ `INCR` and `EXPIRE` are separate calls; crash between them leaves a key without TTL |
-| NFR-R8 | Concurrent workers cannot deadlock on click updates | ⚠️ rows updated in map order; sort codes before updating if running >1 worker |
+| NFR-R8 | Concurrent workers cannot deadlock on click updates | ✅ codes updated in sorted order |
 | NFR-R9 | Panics are recovered and returned as JSON 500 with request ID | ✅ `Recover` middleware; ID in `X-Request-ID` header and log line |
 
 ### 3.4 Data
@@ -206,7 +206,7 @@ Ordered by risk if you launch without it.
 **Later**
 
 13. Push images to a registry from CI and deploy by tag (NFR-DL4).
-14. Per-day analytics + stats API (FR-S2, S3).
+14. ~~Per-day analytics~~ ✅ done; per-link stats API for owners (FR-S3).
 15. JWT `kid` + key rotation (NFR-S9).
 16. Load test and capacity target (NFR-P5).
 17. Audit log (NFR-S12).

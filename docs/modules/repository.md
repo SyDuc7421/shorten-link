@@ -50,9 +50,13 @@ translate them:
   `id >= sinceID` in one query. `idx_user_id` stores `(user_id, id)`, so the
   count is an index range scan. An unknown user gives `ErrNotFound`.
 - **`BatchUpdateClicks`** is used by the worker. It takes a map of code →
-  number of new clicks and runs one `UPDATE links SET clicks = clicks + ?` per
-  code inside a single transaction. Either the whole batch is counted or none
-  of it is.
+  number of new clicks and, inside a single transaction, for each code in
+  sorted order: `UPDATE links SET clicks = clicks + ?`, then an upsert into
+  `analytics_daily` for today (UTC) keyed on `(link_id, stat_date)`. Either the
+  whole batch is counted, totals and per-day rows together, or none of it is.
+  A code whose link was deleted since the click updates nothing and is
+  skipped. Sorting the codes means concurrent workers take row locks in the
+  same order and cannot deadlock.
 
 ## Users in MySQL (`user_mysql.go`)
 

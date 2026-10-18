@@ -44,8 +44,10 @@ so running it twice does nothing the second time.
 
 ### `analytics_daily`
 
-Created by migration 003 for per-day click history. Nothing reads or writes it
-yet.
+Clicks per link per UTC day, one row per `(link_id, stat_date)`. The worker
+adds to it in the same transaction as `links.clicks`; `/api/admin/stats` reads
+it. There is no foreign key, so rows of a deleted link stay (they still count
+in daily totals). Days before this table was first written have no rows.
 
 ### `audit_log`
 

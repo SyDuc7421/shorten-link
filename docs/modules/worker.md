@@ -48,7 +48,8 @@ them, so the same `.env` works for both programs.
 
 Scaling: several workers can consume the same queue; RabbitMQ spreads messages
 between them. `BatchUpdateClicks` uses relative updates (`clicks = clicks + ?`),
-so parallel workers do not overwrite each other.
+so parallel workers do not overwrite each other, and it updates codes in sorted
+order, so two workers lock rows in the same order and cannot deadlock.
 
 ## Before you change it
 

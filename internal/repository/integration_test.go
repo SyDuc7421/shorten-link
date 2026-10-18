@@ -742,3 +742,44 @@ func TestLinkRedis_DeleteMany(t *testing.T) {
 		t.Errorf("empty list: %v", err)
 	}
 }
+
+func TestLinkMySQL_BatchUpdateClicks_DailyRows(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (1, 'a@b.com', 'x')`) //nolint:errcheck
+	for _, l := range []*service.Link{
+		{ID: 10, UserID: 1, ShortCode: "a", OriginalURL: "https://e.com"},
+		{ID: 20, UserID: 1, ShortCode: "b", OriginalURL: "https://e.com"},
+	} {
+		if err := repo.Create(ctx, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "gone" has no link row: deleted between the click and the batch.
+	if err := repo.BatchUpdateClicks(ctx, map[string]int64{"a": 3, "b": 1, "gone": 5}); err != nil {
+		t.Fatalf("batch 1: %v", err)
+	}
+	if err := repo.BatchUpdateClicks(ctx, map[string]int64{"a": 2}); err != nil {
+		t.Fatalf("batch 2: %v", err)
+	}
+
+	if l, _ := repo.GetByCode(ctx, "a"); l.Clicks != 5 {
+		t.Errorf("links.clicks for a: want 5, got %d", l.Clicks)
+	}
+	var rows []struct {
+		LinkID  int64 `db:"link_id"`
+		Clicks  int64 `db:"clicks"`
+		IsToday bool  `db:"is_today"`
+	}
+	if err := db.SelectContext(ctx, &rows,
+		`SELECT link_id, clicks, stat_date = UTC_DATE() AS is_today FROM analytics_daily ORDER BY link_id`); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].LinkID != 10 || rows[0].Clicks != 5 || rows[1].LinkID != 20 || rows[1].Clicks != 1 ||
+		!rows[0].IsToday || !rows[1].IsToday {
+		t.Errorf("want a=5 and b=1 for today, got %+v", rows)
+	}
+}

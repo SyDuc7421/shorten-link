@@ -25,3 +25,6 @@ coverage.html
 
 # Codegraph
 .codegraph/
+# Binaries built by `go build ./cmd/...` at the repo root
+/server
+/worker

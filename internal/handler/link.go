@@ -100,6 +100,14 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "alias already taken")
 		return
 	}
+	if errors.Is(err, service.ErrQuotaExceeded) {
+		// The quota resets at 00:00 UTC; round up so a client never retries early.
+		now := time.Now().UTC()
+		untilReset := now.Truncate(24 * time.Hour).Add(24 * time.Hour).Sub(now)
+		w.Header().Set("Retry-After", strconv.Itoa(int(untilReset.Seconds())+1))
+		writeError(w, http.StatusTooManyRequests, "daily link quota exceeded")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to shorten URL")
 		return

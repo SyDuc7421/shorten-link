@@ -3,6 +3,7 @@ package idgen_test
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/april/shorten-link/pkg/idgen"
 )
@@ -88,5 +89,18 @@ func TestToBase62_SnowflakeLength(t *testing.T) {
 		if l := len(code); l < 7 || l > 11 {
 			t.Errorf("unexpected code length %d for code %q", l, code)
 		}
+	}
+}
+
+func TestMinIDAt_BoundsIDsFromThatMoment(t *testing.T) {
+	g, err := idgen.NewGenerator(1023)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := idgen.MinIDAt(time.Now().Add(-time.Second))
+	id := g.NextID()
+	after := idgen.MinIDAt(time.Now().Add(time.Second))
+	if id < before || id >= after {
+		t.Errorf("want %d <= id(%d) < %d", before, id, after)
 	}
 }

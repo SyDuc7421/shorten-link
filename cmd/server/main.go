@@ -115,13 +115,19 @@ func main() {
 	root := withRateLimits(mux, rdb)
 
 	// Middleware chain (outermost → innermost):
-	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → root
+	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
+	// AccessLog and Recover sit inside RequestID so their lines carry request_id,
+	// and AccessLog wraps Recover so a recovered panic is logged with status 500.
 	chain := http.TimeoutHandler(
 		middleware.SecureHeaders(
 			middleware.CORS(allowedOrigins)(
 				middleware.JWTAuth(authSvc)(
 					middleware.RequestID(log)(
-						middleware.MaxBodySize(root),
+						middleware.AccessLog(
+							middleware.Recover(
+								middleware.MaxBodySize(root),
+							),
+						),
 					),
 				),
 			),

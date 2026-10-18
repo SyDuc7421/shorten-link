@@ -57,7 +57,14 @@ cheapest first, and stops at the first failure:
    in a private, loopback, link-local or carrier-grade NAT range. Hostnames are
    resolved (2 s timeout) and **every** returned address is checked. A host
    that does not resolve is rejected as `ErrInvalidURL`.
-5. **Store.** A new Snowflake ID is drawn. The short code is the alias, or the
+5. **Daily quota.** `repo.QuotaUsage` returns how many links the user created
+   since 00:00 UTC today and their `quota_daily` (100 by default). At or over
+   the quota, `Shorten` returns `ErrQuotaExceeded`. "Since midnight" is
+   `id >= idgen.MinIDAt(midnight)`: link IDs are time-ordered, so no
+   timestamp column or time-zone setting is involved. Deleted links no longer
+   count. Two requests running at the same moment can both pass and overshoot
+   the quota by a few; the create rate limit (10/min) keeps that small.
+6. **Store.** A new Snowflake ID is drawn. The short code is the alias, or the
    ID written in Base62 (see [idgen.md](idgen.md)). Then `repo.Create`.
 
 **Why retry on a taken code?** Generated codes are unique among themselves,

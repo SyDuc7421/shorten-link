@@ -25,6 +25,10 @@ An ID packs three numbers into one `int64`:
 
 41 bits of milliseconds last about 69 years from the 2024 epoch.
 
+`MinIDAt(t)` returns the smallest ID any node can produce at time `t` (time
+bits set, node and sequence zero). `id >= MinIDAt(t)` therefore selects rows
+created at or after `t`; the daily link quota uses this.
+
 `Generator` is safe to use from many goroutines (a mutex guards it).
 `NewGenerator` rejects node IDs outside 0–1023.
 

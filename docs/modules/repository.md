@@ -43,6 +43,9 @@ translate them:
   (keyset pagination). Unlike `OFFSET`, it stays fast on page 1000, and it does
   not skip or repeat rows when links are added between page loads. Snowflake
   IDs grow over time, so ascending ID order is creation order.
+- **`QuotaUsage`** reads the user's `quota_daily` and counts their links with
+  `id >= sinceID` in one query. `idx_user_id` stores `(user_id, id)`, so the
+  count is an index range scan. An unknown user gives `ErrNotFound`.
 - **`BatchUpdateClicks`** is used by the worker. It takes a map of code →
   number of new clicks and runs one `UPDATE links SET clicks = clicks + ?` per
   code inside a single transaction. Either the whole batch is counted or none

@@ -24,7 +24,7 @@ so running it twice does nothing the second time.
 | `id` | Snowflake ID, set by the app (not auto-increment) |
 | `email` | Unique. Stored lower-cased by the service |
 | `password_hash` | bcrypt |
-| `plan`, `quota_daily` | `free` / 100. The quota is not enforced yet (FR-L9) |
+| `plan`, `quota_daily` | `free` / 100. Links a user may create per UTC day; checked in `LinkService.Shorten` |
 | `created_at`, `updated_at` | Set by MySQL |
 
 ### `links`

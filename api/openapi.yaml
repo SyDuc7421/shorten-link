@@ -331,7 +331,21 @@ paths:
               example:
                 error: "alias already taken"
         "429":
-          $ref: "#/components/responses/RateLimited"
+          description: |
+            Too many requests from this IP (`rate limit exceeded`), or the user
+            has created `quota_daily` links today, UTC (`daily link quota exceeded`;
+            `Retry-After` is the number of seconds until 00:00 UTC).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "daily link quota exceeded"
         "500":
           $ref: "#/components/responses/InternalError"
 

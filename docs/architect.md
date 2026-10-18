@@ -148,9 +148,11 @@ Every request passes through these, outermost first:
 | 3 | `CORS` | Allow only origins listed in `ALLOWED_ORIGINS` |
 | 4 | `JWTAuth` | If a valid `Authorization: Bearer` token is present, put the user ID in the request context |
 | 5 | `RequestID` | Reuse or create `X-Request-ID`; attach it to the logger |
-| 6 | `MaxBodySize` | Reject bodies over 1 MB (413) |
-| 7 | `RateLimit` | Per-IP sliding window on redirects, `POST /api/links` and `/api/auth/*` (see spec §4) |
-| 8 | `RequireAuth` | Only on protected routes; returns 401 if step 4 found no user |
+| 6 | `AccessLog` | One `request` log line per request: method, path, status, bytes, duration, IP, user ID |
+| 7 | `Recover` | Turn a handler panic into a logged error (with stack) and a JSON 500 |
+| 8 | `MaxBodySize` | Reject bodies over 1 MB (413) |
+| 9 | `RateLimit` | Per-IP sliding window on redirects, `POST /api/links` and `/api/auth/*` (see spec §4) |
+| 10 | `RequireAuth` | Only on protected routes; returns 401 if step 4 found no user |
 
 ### Routes
 

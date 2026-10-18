@@ -11,11 +11,19 @@ import (
 )
 
 type fakeAdminSetter struct {
-	changed   bool
-	err       error
-	gotEmail  string
-	gotGrant  bool
-	callCount int
+	changed     bool
+	err         error
+	gotEmail    string
+	gotGrant    bool
+	callCount   int
+	created     bool
+	gotPassword string
+}
+
+func (f *fakeAdminSetter) CreateAdmin(_ context.Context, email, password string) (bool, error) {
+	f.callCount++
+	f.gotEmail, f.gotPassword = email, password
+	return f.created, f.err
 }
 
 func (f *fakeAdminSetter) SetAdmin(_ context.Context, email string, admin bool) (bool, error) {
@@ -47,7 +55,7 @@ func TestRunAdminCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
 			setter := tc.setter
-			code := runAdminCommand(context.Background(), tc.args, &setter, &out)
+			code := runAdminCommand(context.Background(), tc.args, &setter, "", &out)
 			if code != tc.wantCode || !strings.Contains(out.String(), tc.wantOut) {
 				t.Errorf("want code %d and %q, got %d %q", tc.wantCode, tc.wantOut, code, out.String())
 			}
@@ -56,6 +64,37 @@ func TestRunAdminCommand(t *testing.T) {
 			}
 			if tc.wantCall && setter.gotGrant != tc.wantGrnt {
 				t.Errorf("grant=%v, want %v", setter.gotGrant, tc.wantGrnt)
+			}
+		})
+	}
+}
+
+func TestRunAdminCommand_Create(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		password string
+		setter   fakeAdminSetter
+		wantCode int
+		wantOut  string
+	}{
+		{name: "new user", args: []string{"create", "a@x.com"}, password: "s3cret-pass", setter: fakeAdminSetter{created: true}, wantCode: 0, wantOut: "created admin a@x.com"},
+		{name: "existing user", args: []string{"create", "a@x.com"}, setter: fakeAdminSetter{}, wantCode: 0, wantOut: "a@x.com already exists: granted admin, password unchanged"},
+		{name: "weak password", args: []string{"create", "a@x.com"}, password: "short", setter: fakeAdminSetter{err: fmt.Errorf("x: %w", service.ErrWeakPassword)}, wantCode: 1, wantOut: "ADMIN_PASSWORD must be 8-72 bytes"},
+		{name: "missing email", args: []string{"create"}, wantCode: 2, wantOut: "usage:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			setter := tc.setter
+			code := runAdminCommand(context.Background(), tc.args, &setter, tc.password, &out)
+			if code != tc.wantCode || !strings.Contains(out.String(), tc.wantOut) {
+				t.Errorf("want code %d and %q, got %d %q", tc.wantCode, tc.wantOut, code, out.String())
+			}
+			if tc.wantCode != 2 && setter.gotPassword != tc.password {
+				t.Errorf("password not passed through: %q", setter.gotPassword)
+			}
+			if strings.Contains(out.String(), "s3cret-pass") {
+				t.Error("password echoed to output")
 			}
 		})
 	}

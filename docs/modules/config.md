@@ -32,6 +32,7 @@ variable, which is better than failing on the first request.
 | `SMTP_PORT` | `587` | | |
 | `SMTP_USERNAME`, `SMTP_PASSWORD` | empty | | No auth when the username is empty |
 | `SMTP_FROM` | `no-reply@localhost` | | Sender address |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | empty | | Not read by `config.Load`. `server admin create` reads `ADMIN_PASSWORD` from the environment (never from argv); `make seed-admin` uses both from `.env` |
 
 `.env.example` lists them all with comments and defaults that work for local
 development. `docker-compose.prod.yml` overrides the hostnames and key paths

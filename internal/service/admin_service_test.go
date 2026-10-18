@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -21,6 +23,12 @@ type fakeAdminRepo struct {
 	role          string
 	stats         *service.Stats
 	statsSince    time.Time
+	createdAdmin  *service.User
+}
+
+func (f *fakeAdminRepo) CreateAdmin(_ context.Context, u *service.User) error {
+	f.createdAdmin = u
+	return nil
 }
 
 func newFakeAdminRepo() *fakeAdminRepo {
@@ -311,5 +319,53 @@ func TestStats_ZeroFillsAndOrders(t *testing.T) {
 	}
 	if st.Totals.Users != 9 || len(st.TopLinks) != 1 {
 		t.Errorf("totals/top not passed through: %+v", st)
+	}
+}
+
+func TestCreateAdmin_NewUser(t *testing.T) {
+	repo := newFakeAdminRepo()
+	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil)
+
+	created, err := svc.CreateAdmin(context.Background(), 42, " Admin@X.com ", "s3cret-pass")
+	if err != nil || !created {
+		t.Fatalf("want created, got %v, %v", created, err)
+	}
+	u := repo.createdAdmin
+	if u == nil || u.ID != 42 || u.Email != "admin@x.com" || u.Role != service.RoleAdmin || u.QuotaDaily != 100 {
+		t.Fatalf("unexpected user %+v", u)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte("s3cret-pass")) != nil {
+		t.Error("password not hashed with bcrypt")
+	}
+}
+
+func TestCreateAdmin_ExistingUserIsGrantedPasswordUnchanged(t *testing.T) {
+	repo := newFakeAdminRepo()
+	users := newMockUserRepo()
+	users.users["u@x.com"] = &service.User{ID: 7, Email: "u@x.com", PasswordHash: "old", Role: service.RoleUser}
+	svc := service.NewAdminService(repo, users, nil, nil)
+
+	created, err := svc.CreateAdmin(context.Background(), 42, "u@x.com", "") // no password needed
+	if err != nil || created {
+		t.Fatalf("want granted (not created), got %v, %v", created, err)
+	}
+	if repo.createdAdmin != nil || repo.roleEmail != "u@x.com" || repo.role != service.RoleAdmin {
+		t.Errorf("want SetRole(admin) only, got created=%+v role=%q/%q", repo.createdAdmin, repo.roleEmail, repo.role)
+	}
+	if users.users["u@x.com"].PasswordHash != "old" {
+		t.Error("password of an existing user must not change")
+	}
+}
+
+func TestCreateAdmin_WeakPassword(t *testing.T) {
+	repo := newFakeAdminRepo()
+	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil)
+	for _, pw := range []string{"", "short", strings.Repeat("x", 73)} {
+		if _, err := svc.CreateAdmin(context.Background(), 42, "new@x.com", pw); !errors.Is(err, service.ErrWeakPassword) {
+			t.Errorf("password %q: want ErrWeakPassword, got %v", pw, err)
+		}
+	}
+	if repo.createdAdmin != nil {
+		t.Error("user created despite a weak password")
 	}
 }

@@ -135,4 +135,7 @@ type AdminRepository interface {
 	// Stats returns totals, per-day rows on or after since (UTC midnight) and
 	// the top links by clicks in that range.
 	Stats(ctx context.Context, since time.Time) (*Stats, error)
+	// CreateAdmin inserts u (already carrying RoleAdmin) and its admin.grant
+	// audit row in one transaction. ErrEmailTaken if the email exists.
+	CreateAdmin(ctx context.Context, u *User) error
 }

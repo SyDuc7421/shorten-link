@@ -9,15 +9,20 @@ every package. Nothing imports it.
 
 ## The `admin` command (`admin_cli.go`)
 
-`server admin grant <email>` and `server admin revoke <email>` set a user's
-role and exit, without starting HTTP. `main` checks `os.Args[1] == "admin"`
+`server admin create <email>` makes an admin: it creates the account with
+role `admin` (password from the `ADMIN_PASSWORD` environment variable, 8–72
+bytes, bcrypt like registration) or, if the email exists, only grants the role
+and keeps the password. It is the way to seed the first admin (`make
+seed-admin` locally). `server admin grant <email>` and `server admin revoke
+<email>` set an existing user's role. All of them exit without starting HTTP. `main` checks `os.Args[1] == "admin"`
 before anything else. The command loads the normal config, so every required
 variable must be set (run it in the server's container, which has them), but
 it connects only to MySQL, so it works while Redis or RabbitMQ are down. Exit codes: `0` done
-(also "already an admin"), `1` unknown email or database error, `2` bad usage.
+(also "already an admin"), `1` unknown email, weak or missing password for a
+new account, or database error, `2` bad usage. The password is never printed.
 The change is audited with actor `0`. In production run it with
 `docker compose run --rm --no-deps server admin ...` (see
-[deploy.md](../deploy.md)); locally `make admin-grant EMAIL=...`.
+[deploy.md](../deploy.md)); locally `make seed-admin` or `make admin-grant EMAIL=...`.
 
 ## Startup, step by step
 

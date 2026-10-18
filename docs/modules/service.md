@@ -277,6 +277,11 @@ cache consistent with the database.
   The repository returns only days with activity; the service fills in the
   missing days with zeros and returns exactly `days` entries, oldest first,
   ending today.
+- **`CreateAdmin(id, email, password)`** is for the CLI seed: an unknown email
+  becomes a new account with role `admin` (same validation and bcrypt as
+  registration, built by the shared `newUser`); a known email is only granted
+  the role, its password untouched. The repository writes the user and its
+  `admin.grant` audit row (metadata `created: true`) in one transaction.
 - **`SetAdmin(email, admin)`** is for the CLI: it lower-cases the email and
   sets the role with actor `0` (system).
 

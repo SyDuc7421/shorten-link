@@ -13,6 +13,7 @@ cannot reach past it.
 |---|---|---|
 | `link_mysql.go` | `service.LinkRepository` | `links` table |
 | `user_mysql.go` | `service.UserRepository` | `users` table |
+| `admin_mysql.go` | `service.AdminRepository` | `users`, `links`, `audit_log` |
 | `link_redis.go` | `service.LinkCache` | Redis keys `sl:<code>` |
 | `token_redis.go` | `service.TokenCache` | Redis keys `rt:<jti>`, `lockout:<email>` |
 
@@ -35,7 +36,9 @@ translate them:
   guarantees that two links never share a code; the service's "is it taken?"
   check is only a convenience for the user.
 - **`GetByCode`** reads by `short_code`. The column uses a binary collation, so
-  `Sale` and `sale` are different codes (see [database.md](database.md)).
+  `Sale` and `sale` are different codes (see [database.md](database.md)). It
+  joins `users` to fill `OwnerDisabled`, so a redirect can refuse every link
+  of a disabled user without a second query.
 - **`Delete`** runs `DELETE ... WHERE short_code = ? AND user_id = ?`. If no row
   was deleted, it returns `ErrNotFound`. This one query both checks ownership
   and deletes, so another user's link looks exactly like a missing one.
@@ -59,11 +62,42 @@ service's "already registered" check. `UpdatePasswordHash` does not report a
 missing user: MySQL counts an unchanged row as 0 affected rows, so that number
 cannot tell "no such user" apart from "same hash".
 
+## Admin in MySQL (`admin_mysql.go`)
+
+Backs the admin API (see `AdminService` in [service.md](service.md)).
+
+**Lists** (`ListUsers`, `ListLinks`, `ListAudit`) return at most
+`service.AdminPageSize` (20) rows, newest first, with keyset paging on `id`
+(`BeforeID` → `id < ?`). Filters are added as `AND` conditions by a small
+`filter` helper, so the SQL and its arguments stay in the same order. Text
+search is `LIKE '%q%'` with `%`, `_` and `\` in the query escaped
+(`containsPattern`); it scans the table, which is fine at the current size.
+`ListLinks` status filters:
+
+| Status | Rows |
+|---|---|
+| `active` | link not disabled, owner not disabled, not expired |
+| `disabled` | link disabled **or** owner disabled |
+| `expired` | `expires_at` in the past |
+
+**Writes** (`SetUserQuota`, `SetUserDisabled`, `SetLinkDisabled`,
+`DeleteLink`, `SetRole`) each run in one transaction: lock the row with
+`SELECT ... FOR UPDATE`, change it, and insert the `audit_log` row. If any step
+fails, nothing is kept, so there is never a change without its audit entry.
+When the row is already in the requested state (same disabled flag, role or
+quota), nothing is written and no audit row is added; the methods that return
+`changed` report `false`. Unknown IDs, codes or emails give
+`ErrNotFound`.
+
+`audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`
+for a quota change and `code` for link actions; it is `NULL` when there is
+nothing to say. `user_id` is the acting admin, `0` for the CLI.
+
 ## Redis (`link_redis.go`, `token_redis.go`)
 
 | Key | Value | Expiry | Used for |
 |---|---|---|---|
-| `sl:<code>` | original URL | 24 h, or the link's expiry if sooner | Redirect cache |
+| `sl:<code>` | original URL, or `!disabled` | 24 h, or the link's expiry if sooner; 5 min for `!disabled` | Redirect cache. `DeleteMany` removes many codes with `DEL` in batches of 500 |
 | `rt:<jti>` | user ID | 7 days | Refresh tokens |
 | `urt:<userID>` | set of the user's refresh token IDs | 7 days, extended on every login or refresh | Revoking all sessions at once |
 | `urv:<userID>` | time of the last "revoke all", Unix ms | 7 days | Blocking tokens authorised before that moment |

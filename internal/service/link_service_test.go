@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ type mockRepo struct {
 	deleteErr   error
 	listFn      func() ([]*service.Link, error)
 	createFn    func(link *service.Link) error // overrides createErr when set
-	quotaFn     func(userID, sinceID int64) (used, limit int, err error)
+	quotaFn     func(userID, sinceID int64) (service.Quota, error)
 }
 
 func (m *mockRepo) Create(_ context.Context, link *service.Link) error {
@@ -35,9 +36,9 @@ func (m *mockRepo) ListByUser(_ context.Context, _ int64, _ int64, _ int) ([]*se
 	return m.listFn()
 }
 func (m *mockRepo) BatchUpdateClicks(_ context.Context, _ map[string]int64) error { return nil }
-func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (int, int, error) {
+func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (service.Quota, error) {
 	if m.quotaFn == nil {
-		return 0, 100, nil
+		return service.Quota{Limit: 100}, nil
 	}
 	return m.quotaFn(userID, sinceID)
 }
@@ -46,13 +47,14 @@ func (m *mockRepo) QuotaUsage(_ context.Context, userID, sinceID int64) (int, in
 
 type mockCache struct {
 	store  map[string]string
+	ttls   map[string]time.Duration
 	getErr error
 	setErr error
 	delErr error
 }
 
 func newMockCache() *mockCache {
-	return &mockCache{store: make(map[string]string)}
+	return &mockCache{store: make(map[string]string), ttls: make(map[string]time.Duration)}
 }
 
 func (c *mockCache) Get(_ context.Context, code string) (string, error) {
@@ -65,15 +67,22 @@ func (c *mockCache) Get(_ context.Context, code string) (string, error) {
 	}
 	return v, nil
 }
-func (c *mockCache) Set(_ context.Context, code, url string, _ time.Duration) error {
+func (c *mockCache) Set(_ context.Context, code, url string, ttl time.Duration) error {
 	if c.setErr != nil {
 		return c.setErr
 	}
 	c.store[code] = url
+	c.ttls[code] = ttl
 	return nil
 }
 func (c *mockCache) Delete(_ context.Context, code string) error {
 	delete(c.store, code)
+	return c.delErr
+}
+func (c *mockCache) DeleteMany(_ context.Context, codes []string) error {
+	for _, code := range codes {
+		delete(c.store, code)
+	}
 	return c.delErr
 }
 
@@ -434,7 +443,7 @@ func TestCheckAlias_RepoError(t *testing.T) {
 func TestShorten_QuotaExceeded(t *testing.T) {
 	created := false
 	repo := &mockRepo{
-		quotaFn:  func(_, _ int64) (int, int, error) { return 100, 100, nil },
+		quotaFn:  func(_, _ int64) (service.Quota, error) { return service.Quota{Used: 100, Limit: 100}, nil },
 		createFn: func(_ *service.Link) error { created = true; return nil },
 	}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
@@ -448,7 +457,7 @@ func TestShorten_QuotaExceeded(t *testing.T) {
 }
 
 func TestShorten_QuotaUnderLimitCreates(t *testing.T) {
-	repo := &mockRepo{quotaFn: func(_, _ int64) (int, int, error) { return 99, 100, nil }}
+	repo := &mockRepo{quotaFn: func(_, _ int64) (service.Quota, error) { return service.Quota{Used: 99, Limit: 100}, nil }}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	if _, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -457,9 +466,9 @@ func TestShorten_QuotaUnderLimitCreates(t *testing.T) {
 
 func TestShorten_QuotaCountsFromUTCMidnight(t *testing.T) {
 	var gotUser, gotSince int64
-	repo := &mockRepo{quotaFn: func(userID, sinceID int64) (int, int, error) {
+	repo := &mockRepo{quotaFn: func(userID, sinceID int64) (service.Quota, error) {
 		gotUser, gotSince = userID, sinceID
-		return 0, 100, nil
+		return service.Quota{Limit: 100}, nil
 	}}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	if _, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil); err != nil {
@@ -472,10 +481,79 @@ func TestShorten_QuotaCountsFromUTCMidnight(t *testing.T) {
 }
 
 func TestShorten_QuotaRepoError(t *testing.T) {
-	repo := &mockRepo{quotaFn: func(_, _ int64) (int, int, error) { return 0, 0, errors.New("db down") }}
+	repo := &mockRepo{quotaFn: func(_, _ int64) (service.Quota, error) { return service.Quota{}, errors.New("db down") }}
 	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
 	_, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil)
 	if err == nil || errors.Is(err, service.ErrQuotaExceeded) {
 		t.Errorf("want plain error, got %v", err)
+	}
+}
+
+func TestShorten_DisabledUser(t *testing.T) {
+	created := false
+	repo := &mockRepo{
+		quotaFn:  func(_, _ int64) (service.Quota, error) { return service.Quota{Limit: 100, Disabled: true}, nil },
+		createFn: func(_ *service.Link) error { created = true; return nil },
+	}
+	svc := newSvcWithGen(repo, newMockCache(), newGen(t))
+	_, err := svc.Shorten(context.Background(), 7, "https://example.com", "", nil)
+	if !errors.Is(err, service.ErrAccountDisabled) {
+		t.Fatalf("want ErrAccountDisabled, got %v", err)
+	}
+	if created {
+		t.Error("link created for a disabled user")
+	}
+}
+
+// countingPublisher counts published events.
+type countingPublisher struct{ n atomic.Int32 }
+
+func (p *countingPublisher) Publish(_ context.Context, _ string, _ any) error {
+	p.n.Add(1)
+	return nil
+}
+
+func TestResolve_DisabledLinkOrOwner(t *testing.T) {
+	now := time.Now()
+	for name, link := range map[string]*service.Link{
+		"link disabled":  {ShortCode: "abc", OriginalURL: "https://e.com", DisabledAt: &now},
+		"owner disabled": {ShortCode: "abc", OriginalURL: "https://e.com", OwnerDisabled: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cache := newMockCache()
+			pub := &countingPublisher{}
+			repo := &mockRepo{getByCodeFn: func(_ string) (*service.Link, error) { return link, nil }}
+			svc := service.NewLinkService(repo, cache, nil, pub)
+
+			if _, err := svc.Resolve(context.Background(), "abc"); !errors.Is(err, service.ErrLinkDisabled) {
+				t.Fatalf("want ErrLinkDisabled, got %v", err)
+			}
+			if cache.store["abc"] != "!disabled" || cache.ttls["abc"] != 5*time.Minute {
+				t.Errorf("want !disabled cached for 5m, got %q for %v", cache.store["abc"], cache.ttls["abc"])
+			}
+			time.Sleep(50 * time.Millisecond)
+			if pub.n.Load() != 0 {
+				t.Error("click published for a disabled link")
+			}
+		})
+	}
+}
+
+func TestResolve_CachedDisabledMarker(t *testing.T) {
+	cache := newMockCache()
+	cache.store["abc"] = "!disabled"
+	pub := &countingPublisher{}
+	repo := &mockRepo{getByCodeFn: func(_ string) (*service.Link, error) {
+		t.Error("repo should not be called on a cached marker")
+		return nil, nil
+	}}
+	svc := service.NewLinkService(repo, cache, nil, pub)
+
+	if _, err := svc.Resolve(context.Background(), "abc"); !errors.Is(err, service.ErrLinkDisabled) {
+		t.Fatalf("want ErrLinkDisabled, got %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if pub.n.Load() != 0 {
+		t.Error("click published for a disabled link")
 	}
 }

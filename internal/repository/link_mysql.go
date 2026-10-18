@@ -44,19 +44,25 @@ func (r *linkMySQL) Create(ctx context.Context, link *service.Link) error {
 }
 
 func (r *linkMySQL) GetByCode(ctx context.Context, code string) (*service.Link, error) {
+	// The owner's disabled flag is read here so a redirect stops for every link
+	// of a disabled user without a second query.
 	const q = `
-		SELECT id, user_id, short_code, original_url, clicks, expires_at, created_at, updated_at
-		FROM links
-		WHERE short_code = ?`
+		SELECT l.id, l.user_id, l.short_code, l.original_url, l.clicks, l.expires_at,
+		       l.disabled_at, u.disabled_at IS NOT NULL AS owner_disabled, l.created_at, l.updated_at
+		FROM links l
+		LEFT JOIN users u ON u.id = l.user_id
+		WHERE l.short_code = ?`
 	var row struct {
-		ID          int64      `db:"id"`
-		UserID      int64      `db:"user_id"`
-		ShortCode   string     `db:"short_code"`
-		OriginalURL string     `db:"original_url"`
-		Clicks      int64      `db:"clicks"`
-		ExpiresAt   *time.Time `db:"expires_at"`
-		CreatedAt   time.Time  `db:"created_at"`
-		UpdatedAt   time.Time  `db:"updated_at"`
+		ID            int64      `db:"id"`
+		UserID        int64      `db:"user_id"`
+		ShortCode     string     `db:"short_code"`
+		OriginalURL   string     `db:"original_url"`
+		Clicks        int64      `db:"clicks"`
+		ExpiresAt     *time.Time `db:"expires_at"`
+		DisabledAt    *time.Time `db:"disabled_at"`
+		OwnerDisabled bool       `db:"owner_disabled"`
+		CreatedAt     time.Time  `db:"created_at"`
+		UpdatedAt     time.Time  `db:"updated_at"`
 	}
 	if err := r.db.GetContext(ctx, &row, q, code); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -66,14 +72,16 @@ func (r *linkMySQL) GetByCode(ctx context.Context, code string) (*service.Link, 
 	}
 
 	link := &service.Link{
-		ID:          row.ID,
-		UserID:      row.UserID,
-		ShortCode:   row.ShortCode,
-		OriginalURL: row.OriginalURL,
-		Clicks:      row.Clicks,
-		ExpiresAt:   row.ExpiresAt,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:            row.ID,
+		UserID:        row.UserID,
+		ShortCode:     row.ShortCode,
+		OriginalURL:   row.OriginalURL,
+		Clicks:        row.Clicks,
+		ExpiresAt:     row.ExpiresAt,
+		DisabledAt:    row.DisabledAt,
+		OwnerDisabled: row.OwnerDisabled,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
 	}
 	return link, nil
 }
@@ -136,24 +144,26 @@ func (r *linkMySQL) ListByUser(ctx context.Context, userID int64, afterID int64,
 	return links, rows.Err()
 }
 
-func (r *linkMySQL) QuotaUsage(ctx context.Context, userID, sinceID int64) (int, int, error) {
+func (r *linkMySQL) QuotaUsage(ctx context.Context, userID, sinceID int64) (service.Quota, error) {
 	// idx_user_id holds (user_id, id), so the count is an index range scan.
 	const q = `
 		SELECT u.quota_daily,
+		       u.disabled_at IS NOT NULL AS disabled,
 		       (SELECT COUNT(*) FROM links l WHERE l.user_id = u.id AND l.id >= ?) AS used
 		FROM users u
 		WHERE u.id = ?`
 	var row struct {
-		Limit int `db:"quota_daily"`
-		Used  int `db:"used"`
+		Limit    int  `db:"quota_daily"`
+		Disabled bool `db:"disabled"`
+		Used     int  `db:"used"`
 	}
 	if err := r.db.GetContext(ctx, &row, q, sinceID, userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, 0, service.ErrNotFound
+			return service.Quota{}, service.ErrNotFound
 		}
-		return 0, 0, fmt.Errorf("repository: quota usage: %w", err)
+		return service.Quota{}, fmt.Errorf("repository: quota usage: %w", err)
 	}
-	return row.Used, row.Limit, nil
+	return service.Quota{Used: row.Used, Limit: row.Limit, Disabled: row.Disabled}, nil
 }
 
 func (r *linkMySQL) BatchUpdateClicks(ctx context.Context, counts map[string]int64) error {

@@ -148,6 +148,11 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Token
 	}
 
 	s.tokens.DeleteLockout(ctx, email) //nolint:errcheck
+	// Checked only after the password matched, so the response reveals the
+	// account's status only to someone who knows its password.
+	if user.DisabledAt != nil {
+		return nil, ErrAccountDisabled
+	}
 	pair, err := s.issueTokenPair(ctx, user.ID, authorizedAt)
 	if errors.Is(err, ErrInvalidToken) {
 		// the password was reset while this login was checking the old one
@@ -176,6 +181,19 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*TokenP
 	}
 	if err != nil {
 		return nil, fmt.Errorf("service: refresh consume: %w", err)
+	}
+
+	// Disabling a user revokes their tokens; this also covers a token stored
+	// in the moment between the disable and the revoke.
+	user, err := s.users.GetByID(ctx, userID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrInvalidToken
+	}
+	if err != nil {
+		return nil, fmt.Errorf("service: refresh user lookup: %w", err)
+	}
+	if user.DisabledAt != nil {
+		return nil, ErrInvalidToken
 	}
 
 	return s.issueTokenPair(ctx, userID, authorizedAt)

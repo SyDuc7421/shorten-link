@@ -740,3 +740,45 @@ func TestParseResetURL(t *testing.T) {
 		}
 	}
 }
+
+func disableUser(t *testing.T, users *mockUserRepo, email string) {
+	t.Helper()
+	now := time.Now()
+	users.users[email].DisabledAt = &now
+}
+
+func TestLogin_DisabledUserCorrectPassword(t *testing.T) {
+	users := newMockUserRepo()
+	svc := newAuthSvc(t, users, newMockTokenCache())
+	svc.Register(context.Background(), "a@b.com", "secret123") //nolint:errcheck
+	disableUser(t, users, "a@b.com")
+
+	_, err := svc.Login(context.Background(), "a@b.com", "secret123")
+	if !errors.Is(err, service.ErrAccountDisabled) {
+		t.Errorf("want ErrAccountDisabled, got %v", err)
+	}
+}
+
+func TestLogin_DisabledUserWrongPassword(t *testing.T) {
+	users := newMockUserRepo()
+	svc := newAuthSvc(t, users, newMockTokenCache())
+	svc.Register(context.Background(), "a@b.com", "secret123") //nolint:errcheck
+	disableUser(t, users, "a@b.com")
+
+	_, err := svc.Login(context.Background(), "a@b.com", "wrongpass")
+	if !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Errorf("want ErrInvalidCredentials (status must not leak), got %v", err)
+	}
+}
+
+func TestRefresh_DisabledUser(t *testing.T) {
+	users := newMockUserRepo()
+	svc := newAuthSvc(t, users, newMockTokenCache())
+	pair, _ := svc.Register(context.Background(), "a@b.com", "password")
+	disableUser(t, users, "a@b.com")
+
+	_, err := svc.Refresh(context.Background(), pair.RefreshToken)
+	if !errors.Is(err, service.ErrInvalidToken) {
+		t.Errorf("want ErrInvalidToken, got %v", err)
+	}
+}

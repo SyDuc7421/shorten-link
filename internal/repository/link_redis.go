@@ -40,6 +40,23 @@ func (c *linkRedis) Set(ctx context.Context, code string, url string, ttl time.D
 	return nil
 }
 
+// deleteBatch bounds how many keys one DEL carries.
+const deleteBatch = 500
+
+func (c *linkRedis) DeleteMany(ctx context.Context, codes []string) error {
+	for start := 0; start < len(codes); start += deleteBatch {
+		end := min(start+deleteBatch, len(codes))
+		keys := make([]string, 0, end-start)
+		for _, code := range codes[start:end] {
+			keys = append(keys, keyPrefix+code)
+		}
+		if err := c.rdb.Del(ctx, keys...).Err(); err != nil {
+			return fmt.Errorf("cache: delete many: %w", err)
+		}
+	}
+	return nil
+}
+
 func (c *linkRedis) Delete(ctx context.Context, code string) error {
 	if err := c.rdb.Del(ctx, keyPrefix+code).Err(); err != nil {
 		return fmt.Errorf("cache: delete %q: %w", code, err)

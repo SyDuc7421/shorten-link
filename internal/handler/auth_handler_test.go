@@ -295,3 +295,20 @@ func TestAuthHandler_ResetPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthHandler_Login_AccountDisabled(t *testing.T) {
+	mux := newAuthMux(&mockAuthSvc{
+		loginFn: func(_ context.Context, _, _ string) (*service.TokenPair, error) {
+			return nil, service.ErrAccountDisabled
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/api/auth/login",
+		bytes.NewBufferString(`{"email":"a@b.com","password":"secret123"}`))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "account disabled") {
+		t.Errorf("want 403 account disabled, got %d %s", w.Code, w.Body.String())
+	}
+}

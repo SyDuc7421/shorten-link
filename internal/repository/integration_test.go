@@ -18,6 +18,7 @@ import (
 	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
+	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
 )
@@ -67,6 +68,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"003_create_analytics.up.sql",
 		"004_links_expires_at_datetime.up.sql",
 		"005_links_short_code_case_sensitive.up.sql",
+		"006_admin.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -624,15 +626,119 @@ func TestLinkMySQL_QuotaUsage(t *testing.T) {
 		}
 	}
 
-	used, limit, err := repo.QuotaUsage(ctx, 1, 20)
+	q, err := repo.QuotaUsage(ctx, 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if used != 2 || limit != 5 {
-		t.Errorf("want used=2 limit=5, got used=%d limit=%d", used, limit)
+	if q.Used != 2 || q.Limit != 5 || q.Disabled {
+		t.Errorf("want used=2 limit=5 enabled, got %+v", q)
 	}
 
-	if _, _, err := repo.QuotaUsage(ctx, 999, 0); !errors.Is(err, service.ErrNotFound) {
+	db.ExecContext(ctx, `UPDATE users SET disabled_at = UTC_TIMESTAMP() WHERE id = 1`) //nolint:errcheck
+	if q, err := repo.QuotaUsage(ctx, 1, 20); err != nil || !q.Disabled {
+		t.Errorf("want Disabled after disabling user, got %+v, %v", q, err)
+	}
+
+	if _, err := repo.QuotaUsage(ctx, 999, 0); !errors.Is(err, service.ErrNotFound) {
 		t.Errorf("unknown user: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestUserMySQL_GetByID_RoleAndDisabled(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewUserMySQL(db)
+	ctx := context.Background()
+	if err := repo.Create(ctx, &service.User{ID: 1, Email: "a@b.com", PasswordHash: "h", Plan: "free"}); err != nil {
+		t.Fatal(err)
+	}
+	u, err := repo.GetByID(ctx, 1)
+	if err != nil || u.Role != service.RoleUser || u.DisabledAt != nil {
+		t.Fatalf("want role user, not disabled; got %+v, %v", u, err)
+	}
+	db.ExecContext(ctx, `UPDATE users SET role='admin', disabled_at=UTC_TIMESTAMP() WHERE id=1`) //nolint:errcheck
+	u, err = repo.GetByEmail(ctx, "a@b.com")
+	if err != nil || u.Role != service.RoleAdmin || u.DisabledAt == nil {
+		t.Fatalf("want admin + disabled, got %+v, %v", u, err)
+	}
+}
+
+func TestOpenMySQL_SessionTimeZoneIsUTC(t *testing.T) {
+	ctx := context.Background()
+	c, err := tcmysql.Run(ctx, "mysql:8",
+		tcmysql.WithDatabase("shortlink"),
+		tcmysql.WithUsername("root"),
+		tcmysql.WithPassword("secret"),
+	)
+	if err != nil {
+		t.Fatalf("start mysql container: %v", err)
+	}
+	t.Cleanup(func() { c.Terminate(ctx) }) //nolint:errcheck
+	host, err := c.Host(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := c.MappedPort(ctx, "3306/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{MySQLHost: host, MySQLPort: int(port.Num()), MySQLUser: "root", MySQLPassword: "secret", MySQLDB: "shortlink"}
+	db, err := cfg.OpenMySQL(ctx)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	var tz string
+	if err := db.GetContext(ctx, &tz, `SELECT @@session.time_zone`); err != nil {
+		t.Fatal(err)
+	}
+	if tz != "+00:00" {
+		t.Errorf("want session time zone +00:00, got %q", tz)
+	}
+}
+
+func TestLinkMySQL_GetByCode_DisabledFlags(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewLinkMySQL(db)
+	ctx := context.Background()
+
+	db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash) VALUES (1, 'a@b.com', 'x')`) //nolint:errcheck
+	if err := repo.Create(ctx, &service.Link{ID: 10, UserID: 1, ShortCode: "abc", OriginalURL: "https://e.com"}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := repo.GetByCode(ctx, "abc")
+	if err != nil || l.DisabledAt != nil || l.OwnerDisabled {
+		t.Fatalf("want enabled link and owner, got %+v, %v", l, err)
+	}
+
+	db.ExecContext(ctx, `UPDATE links SET disabled_at = UTC_TIMESTAMP() WHERE id = 10`) //nolint:errcheck
+	db.ExecContext(ctx, `UPDATE users SET disabled_at = UTC_TIMESTAMP() WHERE id = 1`)  //nolint:errcheck
+	l, err = repo.GetByCode(ctx, "abc")
+	if err != nil || l.DisabledAt == nil || !l.OwnerDisabled {
+		t.Fatalf("want both flags set, got %+v, %v", l, err)
+	}
+}
+
+func TestLinkRedis_DeleteMany(t *testing.T) {
+	rdb := setupRedis(t)
+	cache := repository.NewLinkRedis(rdb)
+	ctx := context.Background()
+
+	codes := make([]string, 1200)
+	for i := range codes {
+		codes[i] = fmt.Sprintf("c%d", i)
+		if err := cache.Set(ctx, codes[i], "https://e.com", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cache.DeleteMany(ctx, codes); err != nil {
+		t.Fatal(err)
+	}
+	if n := rdb.DBSize(ctx).Val(); n != 0 {
+		t.Errorf("want empty cache, %d keys left", n)
+	}
+	if err := cache.DeleteMany(ctx, nil); err != nil {
+		t.Errorf("empty list: %v", err)
 	}
 }

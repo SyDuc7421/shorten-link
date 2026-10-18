@@ -21,8 +21,18 @@ var ErrInvalidAlias = errors.New("service: alias must be 3-16 characters of A-Z,
 // ErrCodeTaken is returned by repositories when a short code is already in use.
 var ErrCodeTaken = errors.New("service: short code already taken")
 
+// ErrLinkDisabled is returned when an admin disabled the link or its owner.
+var ErrLinkDisabled = errors.New("service: link disabled")
+
 // ErrQuotaExceeded is returned when a user has created quota_daily links today (UTC).
 var ErrQuotaExceeded = errors.New("service: daily link quota exceeded")
+
+// Quota is a user's link-creation allowance for the current UTC day.
+type Quota struct {
+	Used     int
+	Limit    int
+	Disabled bool
+}
 
 // Link is the core domain model for a shortened URL.
 type Link struct {
@@ -32,8 +42,12 @@ type Link struct {
 	OriginalURL string
 	Clicks      int64
 	ExpiresAt   *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	DisabledAt  *time.Time // set while an admin has disabled the link
+	// OwnerDisabled is true when the owner's account is disabled. Only
+	// GetByCode fills it.
+	OwnerDisabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // LinkRepository is the persistence interface, defined here at the consumer site.
@@ -43,9 +57,10 @@ type LinkRepository interface {
 	Delete(ctx context.Context, code string, userID int64) error
 	ListByUser(ctx context.Context, userID int64, afterID int64, limit int) ([]*Link, error)
 	BatchUpdateClicks(ctx context.Context, counts map[string]int64) error
-	// QuotaUsage returns how many links userID created with id >= sinceID, and
-	// the user's quota_daily. ErrNotFound if the user does not exist.
-	QuotaUsage(ctx context.Context, userID, sinceID int64) (used, limit int, err error)
+	// QuotaUsage returns how many links userID created with id >= sinceID, the
+	// user's quota_daily and whether the account is disabled. ErrNotFound if
+	// the user does not exist.
+	QuotaUsage(ctx context.Context, userID, sinceID int64) (Quota, error)
 }
 
 // LinkCache is the cache interface, defined here at the consumer site.
@@ -53,4 +68,6 @@ type LinkCache interface {
 	Get(ctx context.Context, code string) (string, error)
 	Set(ctx context.Context, code string, url string, ttl time.Duration) error
 	Delete(ctx context.Context, code string) error
+	// DeleteMany removes several codes; used when a whole user is disabled.
+	DeleteMany(ctx context.Context, codes []string) error
 }

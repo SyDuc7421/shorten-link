@@ -153,12 +153,13 @@ Every request passes through these, outermost first:
 | 8 | `MaxBodySize` | Reject bodies over 1 MB (413) |
 | 9 | `RateLimit` | Per-IP sliding window on redirects, `POST /api/links` and `/api/auth/*` (see spec §4) |
 | 10 | `RequireAuth` | Only on protected routes; returns 401 if step 4 found no user |
+| 11 | `RequireAdmin` | Only on `/api/admin/*`; returns 403 unless the user is an enabled admin (read from MySQL each request) |
 
 ### Routes
 
 | Method | Path | Auth | What it does |
 |---|---|---|---|
-| GET | `/{code}` | — | Redirect to the original URL |
+| GET | `/{code}` | — | Redirect to the original URL (410 if an admin disabled the link or its owner) |
 | POST | `/api/links` | ✔ | Create a short link (optional custom `alias`) |
 | GET | `/api/links?cursor=` | ✔ | List your links, 20 per page |
 | GET | `/api/links/availability?alias=` | ✔ | Check whether a custom alias can be used |
@@ -168,6 +169,14 @@ Every request passes through these, outermost first:
 | POST | `/api/auth/refresh` | — | Swap a refresh token for a new pair |
 | POST | `/api/auth/forgot-password` | — | Email a password reset link (always 202) |
 | POST | `/api/auth/reset-password` | — | Set a new password with the link's token; ends all sessions |
+| GET | `/api/admin/me` | admin | The signed-in admin (403 for anyone else) |
+| GET | `/api/admin/users?q=&status=&cursor=` | admin | List users, newest first |
+| GET, PATCH | `/api/admin/users/{id}` | admin | User detail; change `quota_daily` |
+| POST | `/api/admin/users/{id}/disable`, `/enable` | admin | Disable (ends sessions, stops their links) or enable a user |
+| GET | `/api/admin/links?q=&status=&user_id=&cursor=` | admin | List all links |
+| POST | `/api/admin/links/{code}/disable`, `/enable` | admin | Disable or enable a link (disabled → 410) |
+| DELETE | `/api/admin/links/{code}` | admin | Delete any link |
+| GET | `/api/admin/audit?actor_id=&resource_type=&cursor=` | admin | Admin action log |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 
@@ -247,7 +256,7 @@ to 3 attempts.
 
 | Key | Value | TTL |
 |---|---|---|
-| `sl:<code>` | original URL | ≤ 24h, never past expiry |
+| `sl:<code>` | original URL, or `!disabled` for a disabled link | ≤ 24h, never past expiry; 5 min for `!disabled` |
 | `rt:<jti>` | user ID | 7 days |
 | `urt:<userID>` | set of the user's refresh token IDs | 7 days |
 | `urv:<userID>` | time of the user's last "revoke all sessions" | 7 days |

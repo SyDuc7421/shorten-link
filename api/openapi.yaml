@@ -59,6 +59,14 @@ paths:
               example: https://www.example.com/some/long/path
         "404":
           $ref: "#/components/responses/NotFound"
+        "410":
+          description: An admin disabled the link, or the account that owns it
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "link disabled"
         "429":
           $ref: "#/components/responses/RateLimited"
         "500":
@@ -140,6 +148,16 @@ paths:
                 $ref: "#/components/schemas/Error"
               example:
                 error: "invalid email or password"
+        "403":
+          description: |
+            The password is right but an admin has disabled the account. Only
+            returned after the password matched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "account disabled"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "429":
@@ -183,7 +201,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Refresh token invalid, expired or already used
+          description: Refresh token invalid, expired or already used, or the account is disabled
           content:
             application/json:
               schema:
@@ -312,6 +330,14 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: An admin has disabled the account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "account disabled"
         "413":
           $ref: "#/components/responses/PayloadTooLarge"
         "422":
@@ -427,6 +453,345 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /api/admin/me:
+    get:
+      summary: The signed-in admin
+      description: |
+        200 for an enabled admin, 403 for anyone else. The web app uses it to
+        decide whether to show the admin area.
+      tags: [Admin]
+      responses:
+        "200":
+          description: The admin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, example: "7311234567890123456" }
+                  email: { type: string, example: "admin@example.com" }
+                  role: { type: string, enum: [admin] }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/users:
+    get:
+      summary: List users
+      description: Newest first, 20 per page.
+      tags: [Admin]
+      parameters:
+        - name: q
+          in: query
+          description: Email contains this text.
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, disabled] }
+        - $ref: "#/components/parameters/adminCursor"
+      responses:
+        "200":
+          description: A page of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminUser" }
+                  next_cursor:
+                    type: string
+                    description: Pass as `cursor` for the next page. Empty on the last page.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/userId"
+    get:
+      summary: Get a user
+      tags: [Admin]
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserDetail" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      summary: Change a user's daily link quota
+      description: Audited as `user.quota` with the values before and after.
+      tags: [Admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quota_daily]
+              properties:
+                quota_daily: { type: integer, minimum: 0, maximum: 100000 }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: The updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserDetail" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/users/{id}/disable:
+    parameters:
+      - $ref: "#/components/parameters/userId"
+    post:
+      summary: Disable a user
+      description: |
+        The user can no longer sign in, all their sessions end, they cannot
+        create links, and all their links answer 410. Calling it on a disabled
+        user returns 200 and writes no audit entry (it still revokes sessions
+        and clears the cache, so a retry after an error finishes the job).
+      tags: [Admin]
+      requestBody:
+        $ref: "#/components/requestBodies/Reason"
+      responses:
+        "200":
+          description: The disabled user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserDetail" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "409":
+          description: An admin cannot disable their own account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              example: { error: "cannot disable yourself" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/users/{id}/enable:
+    parameters:
+      - $ref: "#/components/parameters/userId"
+    post:
+      summary: Enable a user
+      description: Their links redirect again, except links an admin disabled one by one.
+      tags: [Admin]
+      requestBody:
+        $ref: "#/components/requestBodies/Reason"
+      responses:
+        "200":
+          description: The enabled user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminUserDetail" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/links:
+    get:
+      summary: List all links
+      description: Newest first, 20 per page.
+      tags: [Admin]
+      parameters:
+        - name: q
+          in: query
+          description: Short code equals this text, or the original URL contains it.
+          schema: { type: string }
+        - name: status
+          in: query
+          description: |
+            `active`: not disabled, owner not disabled, not expired.
+            `disabled`: the link or its owner is disabled. `expired`: past `expires_at`.
+          schema: { type: string, enum: [active, disabled, expired] }
+        - name: user_id
+          in: query
+          description: Only links of this user.
+          schema: { type: string }
+        - $ref: "#/components/parameters/adminCursor"
+      responses:
+        "200":
+          description: A page of links
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  links:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdminLink" }
+                  next_cursor: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/links/{code}/disable:
+    parameters:
+      - $ref: "#/components/parameters/code"
+    post:
+      summary: Disable a link
+      description: The link answers 410 from the next request on. Idempotent.
+      tags: [Admin]
+      requestBody:
+        $ref: "#/components/requestBodies/Reason"
+      responses:
+        "200":
+          description: The link
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminLink" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/links/{code}/enable:
+    parameters:
+      - $ref: "#/components/parameters/code"
+    post:
+      summary: Enable a link
+      description: Still answers 410 while its owner is disabled.
+      tags: [Admin]
+      requestBody:
+        $ref: "#/components/requestBodies/Reason"
+      responses:
+        "200":
+          description: The link
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminLink" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/links/{code}:
+    parameters:
+      - $ref: "#/components/parameters/code"
+    delete:
+      summary: Delete any link
+      tags: [Admin]
+      requestBody:
+        $ref: "#/components/requestBodies/Reason"
+      responses:
+        "204":
+          description: Link deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/admin/audit:
+    get:
+      summary: List admin actions
+      description: Newest first, 20 per page.
+      tags: [Admin]
+      parameters:
+        - name: actor_id
+          in: query
+          schema: { type: string }
+        - name: resource_type
+          in: query
+          schema: { type: string, enum: [user, link] }
+        - $ref: "#/components/parameters/adminCursor"
+      responses:
+        "200":
+          description: A page of audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEntry" }
+                  next_cursor: { type: string }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
 
   securitySchemes:
@@ -447,7 +812,93 @@ components:
         pattern: "^[0-9A-Za-z_-]{3,16}$"
       example: aB3xY9zQ1k
 
+    userId:
+      name: id
+      in: path
+      required: true
+      description: User ID (a string; snowflake IDs exceed JavaScript's safe integer range).
+      schema:
+        type: string
+        pattern: "^[0-9]+$"
+
+    adminCursor:
+      name: cursor
+      in: query
+      description: The `next_cursor` of the previous page.
+      schema:
+        type: string
+
+  requestBodies:
+
+    Reason:
+      required: false
+      description: Optional reason, stored in the audit log.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              reason: { type: string, maxLength: 500 }
+
   schemas:
+
+    AdminUser:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        role: { type: string, enum: [user, admin] }
+        quota_daily: { type: integer }
+        disabled_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        link_count: { type: integer }
+
+    AdminUserDetail:
+      allOf:
+        - $ref: "#/components/schemas/AdminUser"
+        - type: object
+          properties:
+            links_today: { type: integer, description: Links created since 00:00 UTC }
+            total_clicks: { type: integer }
+
+    AdminLink:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        short_url: { type: string, format: uri }
+        original_url: { type: string, format: uri }
+        clicks: { type: integer }
+        owner:
+          type: object
+          properties:
+            id: { type: string }
+            email: { type: string }
+            disabled_at: { type: string, format: date-time, nullable: true }
+        disabled_at: { type: string, format: date-time, nullable: true }
+        expires_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string }
+        actor:
+          type: object
+          nullable: true
+          description: The admin who acted; null for the `server admin` command.
+          properties:
+            id: { type: string }
+            email: { type: string }
+        action:
+          type: string
+          enum: [user.disable, user.enable, user.quota, link.disable, link.enable, link.delete, admin.grant, admin.revoke]
+        resource_type: { type: string, enum: [user, link] }
+        resource_id: { type: string }
+        metadata:
+          type: object
+          description: "`reason` when given; `before`/`after` for quota; `code` for links."
+        created_at: { type: string, format: date-time }
 
     ShortenRequest:
       type: object
@@ -615,6 +1066,15 @@ components:
             $ref: "#/components/schemas/Error"
           example:
             error: "unauthorized"
+
+    Forbidden:
+      description: Signed in, but not an enabled admin
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "forbidden"
 
     NotFound:
       description: Resource not found

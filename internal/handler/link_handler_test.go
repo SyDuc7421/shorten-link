@@ -371,6 +371,7 @@ func TestLinkHandler_Shorten_AliasErrors(t *testing.T) {
 		{service.ErrInvalidAlias, http.StatusBadRequest},
 		{fmt.Errorf("service: shorten: %w", service.ErrCodeTaken), http.StatusConflict},
 		{service.ErrQuotaExceeded, http.StatusTooManyRequests},
+		{service.ErrAccountDisabled, http.StatusForbidden},
 	} {
 		mux := newLinkMux(&mockLinkSvc{
 			shortenFn: func(_ context.Context, _ int64, _, _ string, _ *time.Time) (*service.Link, error) {
@@ -450,5 +451,20 @@ func TestLinkHandler_Shorten_QuotaExceededRetryAfterMidnightUTC(t *testing.T) {
 	got, err := strconv.Atoi(w.Header().Get("Retry-After"))
 	if err != nil || got < want-2 || got > want {
 		t.Errorf("want Retry-After about %d, got %q", want, w.Header().Get("Retry-After"))
+	}
+}
+
+func TestLinkHandler_Redirect_Disabled(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		resolveFn: func(_ context.Context, _ string) (string, error) {
+			return "", fmt.Errorf("service: resolve: %w", service.ErrLinkDisabled)
+		},
+	})
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/abc", nil))
+
+	if w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "link disabled") {
+		t.Errorf("want 410 link disabled, got %d %s", w.Code, w.Body.String())
 	}
 }

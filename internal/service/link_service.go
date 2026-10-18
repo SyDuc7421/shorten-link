@@ -28,9 +28,14 @@ type NoopPublisher struct{}
 func (NoopPublisher) Publish(_ context.Context, _ string, _ any) error { return nil }
 
 const (
-	cacheTTL       = 24 * time.Hour
-	publishTimeout = 2 * time.Second
-	dnsTimeout     = 2 * time.Second
+	cacheTTL = 24 * time.Hour
+
+	// disabledMarker is cached instead of a URL for a disabled link, so clicks
+	// on a disabled (often abusive) link do not each query MySQL.
+	disabledMarker   = "!disabled"
+	disabledCacheTTL = 5 * time.Minute
+	publishTimeout   = 2 * time.Second
+	dnsTimeout       = 2 * time.Second
 
 	maxCodeAttempts = 3
 )
@@ -72,11 +77,14 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias s
 	// id >= the smallest ID of today's midnight. Concurrent requests can each
 	// pass this check and overshoot by a few; the create rate limit bounds that.
 	midnight := time.Now().UTC().Truncate(24 * time.Hour)
-	used, limit, err := s.repo.QuotaUsage(ctx, userID, idgen.MinIDAt(midnight))
+	quota, err := s.repo.QuotaUsage(ctx, userID, idgen.MinIDAt(midnight))
 	if err != nil {
 		return nil, fmt.Errorf("service: shorten: quota: %w", err)
 	}
-	if used >= limit {
+	if quota.Disabled {
+		return nil, ErrAccountDisabled
+	}
+	if quota.Used >= quota.Limit {
 		return nil, ErrQuotaExceeded
 	}
 
@@ -160,6 +168,9 @@ func aliasProblem(alias string) string {
 // Redis-first; falls back to MySQL on miss. Click event is published async.
 func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) {
 	if rawURL, err := s.cache.Get(ctx, code); err == nil {
+		if rawURL == disabledMarker {
+			return "", ErrLinkDisabled
+		}
 		s.publishAsync("link.clicked", map[string]any{"code": code})
 		return rawURL, nil
 	}
@@ -167,6 +178,10 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) 
 	link, err := s.repo.GetByCode(ctx, code)
 	if err != nil {
 		return "", fmt.Errorf("service: resolve: %w", err)
+	}
+	if link.DisabledAt != nil || link.OwnerDisabled {
+		s.cache.Set(ctx, code, disabledMarker, disabledCacheTTL) //nolint:errcheck
+		return "", ErrLinkDisabled
 	}
 	if link.ExpiresAt != nil && time.Now().After(*link.ExpiresAt) {
 		return "", ErrNotFound

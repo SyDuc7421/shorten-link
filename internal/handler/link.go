@@ -100,6 +100,10 @@ func (h *LinkHandler) Shorten(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "alias already taken")
 		return
 	}
+	if errors.Is(err, service.ErrAccountDisabled) {
+		writeError(w, http.StatusForbidden, "account disabled")
+		return
+	}
 	if errors.Is(err, service.ErrQuotaExceeded) {
 		// The quota resets at 00:00 UTC; round up so a client never retries early.
 		now := time.Now().UTC()
@@ -152,6 +156,10 @@ func (h *LinkHandler) Redirect(w http.ResponseWriter, r *http.Request) {
 
 	rawURL, err := h.svc.Resolve(r.Context(), code)
 	if err != nil {
+		if errors.Is(err, service.ErrLinkDisabled) {
+			writeError(w, http.StatusGone, "link disabled")
+			return
+		}
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "link not found")
 			return

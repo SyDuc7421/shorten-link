@@ -25,6 +25,8 @@ so running it twice does nothing the second time.
 | `email` | Unique. Stored lower-cased by the service |
 | `password_hash` | bcrypt |
 | `plan`, `quota_daily` | `free` / 100. Links a user may create per UTC day; checked in `LinkService.Shorten` |
+| `role` | `user` (default) or `admin`. Only admins may call `/api/admin/*` |
+| `disabled_at` | `DATETIME`, nullable. Set while an admin has disabled the account |
 | `created_at`, `updated_at` | Set by MySQL |
 
 ### `links`
@@ -37,12 +39,21 @@ so running it twice does nothing the second time.
 | `original_url` | `TEXT` |
 | `clicks` | Running total, updated in batches by the worker |
 | `expires_at` | `DATETIME`, nullable, stored in UTC |
+| `disabled_at` | `DATETIME`, nullable. Set while an admin has disabled this link |
 | `created_at`, `updated_at` | Set by MySQL |
 
-### `analytics_daily`, `audit_log`
+### `analytics_daily`
 
-Created by migration 003 for planned features (per-day click history, audit
-trail). Nothing reads or writes them yet.
+Created by migration 003 for per-day click history. Nothing reads or writes it
+yet.
+
+### `audit_log`
+
+One row per admin action, written in the same transaction as the change (see
+[repository.md](repository.md)). `user_id` is the admin (`0` for the CLI),
+`action` is e.g. `user.disable` or `link.delete`, `resource_type` +
+`resource_id` name the target, `metadata` is JSON (reason, before/after,
+code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 
 ## History
 
@@ -53,10 +64,11 @@ trail). Nothing reads or writes them yet.
 | 003 | `analytics_daily`, `audit_log` | Planned features |
 | 004 | `links.expires_at` → `DATETIME` | `TIMESTAMP` cannot store dates after 2038-01-19, so long expiries failed |
 | 005 | `links.short_code` → `utf8mb4_bin` | The default collation ignores letter case: `/Sale` and `/sale` hit the same row, and generated codes differing only in case collided |
+| 006 | `users.role`, `users.disabled_at`, `links.disabled_at`, index `audit_log(created_at)` | Admin site: who may administer, and disabling without deleting |
 
 ## Writing a migration
 
-1. Use the next number: `006_what_it_does.up.sql` and `.down.sql`.
+1. Use the next number: `007_what_it_does.up.sql` and `.down.sql`.
 2. Start the file with a comment that says **why**, not only what. The history
    table above is built from those comments.
 3. Write the `down` file even if you hope never to run it. If it can fail on

@@ -1,4 +1,4 @@
-.PHONY: run build test migrate lint docker-up
+.PHONY: run build test migrate lint docker-up admin-grant admin-revoke
 
 run:
 	set -a && . ./.env && set +a && go run ./cmd/server
@@ -23,3 +23,10 @@ keys:
 	mkdir -p keys
 	openssl genrsa -out keys/private.pem 2048
 	openssl rsa -in keys/private.pem -pubout -out keys/public.pem
+
+# make admin-grant EMAIL=you@example.com (the user must have registered first)
+admin-grant:
+	set -a && . ./.env && set +a && go run ./cmd/server admin grant "$(EMAIL)"
+
+admin-revoke:
+	set -a && . ./.env && set +a && go run ./cmd/server admin revoke "$(EMAIL)"

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 
@@ -311,5 +312,56 @@ func TestAdminMySQL_ListAudit(t *testing.T) {
 	older, _ := repo.ListAudit(ctx, service.AuditFilter{BeforeID: all[0].ID})
 	if len(older) != 2 {
 		t.Errorf("before: want 2, got %d", len(older))
+	}
+}
+
+func TestAdminMySQL_Stats(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewAdminMySQL(db)
+	ctx := context.Background()
+
+	// Users and links: two today (one disabled each), one 40 days ago.
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash, created_at, disabled_at) VALUES
+		(1, 'a@x.com', 'x', UTC_TIMESTAMP(), NULL),
+		(2, 'b@x.com', 'x', UTC_TIMESTAMP(), UTC_TIMESTAMP()),
+		(3, 'c@x.com', 'x', UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`)
+	mustExec(t, db, `INSERT INTO links (id, user_id, short_code, original_url, clicks, created_at, disabled_at) VALUES
+		(10, 1, 'top', 'https://e.com', 7, UTC_TIMESTAMP(), NULL),
+		(11, 1, 'low', 'https://e.com', 2, UTC_TIMESTAMP() - INTERVAL 1 DAY, UTC_TIMESTAMP()),
+		(12, 3, 'old', 'https://e.com', 1, UTC_TIMESTAMP() - INTERVAL 40 DAY, NULL)`)
+	// Link 99 was deleted: its clicks count per day but it cannot be a top link.
+	mustExec(t, db, `INSERT INTO analytics_daily (link_id, stat_date, clicks) VALUES
+		(10, UTC_DATE(), 5), (10, UTC_DATE() - INTERVAL 1 DAY, 2), (11, UTC_DATE() - INTERVAL 1 DAY, 2),
+		(99, UTC_DATE(), 100), (12, UTC_DATE() - INTERVAL 40 DAY, 1)`)
+
+	var today time.Time
+	if err := db.GetContext(ctx, &today, `SELECT UTC_DATE()`); err != nil {
+		t.Fatal(err)
+	}
+	st, err := repo.Stats(ctx, today.AddDate(0, 0, -6))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := service.StatsTotals{Users: 3, Links: 3, Clicks: 10, DisabledUsers: 1, DisabledLinks: 1}
+	if st.Totals != want {
+		t.Errorf("totals: want %+v, got %+v", want, st.Totals)
+	}
+	byDay := map[string]service.DayStats{}
+	for _, d := range st.Daily {
+		byDay[d.Date.Format("2006-01-02")] = d
+	}
+	td, yd := byDay[today.Format("2006-01-02")], byDay[today.AddDate(0, 0, -1).Format("2006-01-02")]
+	if td.NewUsers != 2 || td.NewLinks != 1 || td.Clicks != 105 {
+		t.Errorf("today: want users=2 links=1 clicks=105, got %+v", td)
+	}
+	if yd.NewUsers != 0 || yd.NewLinks != 1 || yd.Clicks != 4 {
+		t.Errorf("yesterday: want links=1 clicks=4, got %+v", yd)
+	}
+	if len(st.Daily) != 2 {
+		t.Errorf("rows before since must be excluded, got %d days", len(st.Daily))
+	}
+	if len(st.TopLinks) != 2 || st.TopLinks[0] != (service.TopLink{Code: "top", Clicks: 7}) || st.TopLinks[1].Code != "low" {
+		t.Errorf("top links: got %+v", st.TopLinks)
 	}
 }

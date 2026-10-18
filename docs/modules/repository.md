@@ -93,6 +93,14 @@ quota), nothing is written and no audit row is added; the methods that return
 `changed` report `false`. Unknown IDs, codes or emails give
 `ErrNotFound`.
 
+**`Stats(since)`** is read-only: totals from `COUNT(*)`/`SUM(clicks)` on the
+live tables; new users and new links per `DATE(created_at)` (UTC, because the
+session time zone is UTC); clicks per `stat_date` from `analytics_daily`; and
+the top 10 links by clicks since `since`. Top links `JOIN links`, so a deleted
+link drops out of the top list while its clicks still count per day. The
+per-day queries scan `users` and `links` by `created_at`, which has no index;
+fine at the current size.
+
 `audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`
 for a quota change and `code` for link actions; it is `NULL` when there is
 nothing to say. `user_id` is the acting admin, `0` for the CLI.

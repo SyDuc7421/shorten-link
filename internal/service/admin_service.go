@@ -187,6 +187,35 @@ func (s *AdminService) DeleteLink(ctx context.Context, actorID int64, code, reas
 	return nil
 }
 
+// --- stats ---
+
+// Stats returns totals, one entry per UTC day for the last `days` days ending
+// today (oldest first, zeros where nothing happened) and the top links.
+func (s *AdminService) Stats(ctx context.Context, days int) (*Stats, error) {
+	if days < 1 || days > MaxStatsDays {
+		return nil, ErrInvalidDays
+	}
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	since := today.AddDate(0, 0, -(days - 1))
+	st, err := s.repo.Stats(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("service: stats: %w", err)
+	}
+
+	found := make(map[int64]DayStats, len(st.Daily)) // keyed by Unix seconds of the UTC midnight
+	for _, d := range st.Daily {
+		found[d.Date.Unix()] = d
+	}
+	daily := make([]DayStats, days)
+	for i := range daily {
+		date := since.AddDate(0, 0, i)
+		daily[i] = found[date.Unix()]
+		daily[i].Date = date
+	}
+	st.Daily = daily
+	return st, nil
+}
+
 // --- audit and roles ---
 
 func (s *AdminService) ListAudit(ctx context.Context, f AuditFilter) ([]*AuditEntry, error) {

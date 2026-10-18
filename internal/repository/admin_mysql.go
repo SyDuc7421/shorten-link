@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -420,4 +421,84 @@ func (r *adminMySQL) ListAudit(ctx context.Context, f service.AuditFilter) ([]*s
 		}
 	}
 	return entries, nil
+}
+
+// --- stats ---
+
+func (r *adminMySQL) Stats(ctx context.Context, since time.Time) (*service.Stats, error) {
+	st := &service.Stats{}
+
+	const totals = `
+		SELECT (SELECT COUNT(*) FROM users) AS users,
+		       (SELECT COUNT(*) FROM links) AS links,
+		       (SELECT COALESCE(SUM(clicks), 0) FROM links) AS clicks,
+		       (SELECT COUNT(*) FROM users WHERE disabled_at IS NOT NULL) AS disabled_users,
+		       (SELECT COUNT(*) FROM links WHERE disabled_at IS NOT NULL) AS disabled_links`
+	var t struct {
+		Users         int64 `db:"users"`
+		Links         int64 `db:"links"`
+		Clicks        int64 `db:"clicks"`
+		DisabledUsers int64 `db:"disabled_users"`
+		DisabledLinks int64 `db:"disabled_links"`
+	}
+	if err := r.db.GetContext(ctx, &t, totals); err != nil {
+		return nil, fmt.Errorf("repository: stats totals: %w", err)
+	}
+	st.Totals = service.StatsTotals{Users: t.Users, Links: t.Links, Clicks: t.Clicks, DisabledUsers: t.DisabledUsers, DisabledLinks: t.DisabledLinks}
+
+	// The session runs in UTC (see config.OpenMySQL), so DATE() is the UTC day.
+	days := map[int64]*service.DayStats{} // keyed by Unix seconds of the UTC midnight
+	day := func(d time.Time) *service.DayStats {
+		if days[d.Unix()] == nil {
+			days[d.Unix()] = &service.DayStats{Date: d.UTC()}
+		}
+		return days[d.Unix()]
+	}
+	for _, part := range []struct {
+		q   string
+		set func(d *service.DayStats, n int64)
+	}{
+		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM users WHERE created_at >= ? GROUP BY d`,
+			func(d *service.DayStats, n int64) { d.NewUsers = n }},
+		{`SELECT DATE(created_at) AS d, COUNT(*) AS n FROM links WHERE created_at >= ? GROUP BY d`,
+			func(d *service.DayStats, n int64) { d.NewLinks = n }},
+		{`SELECT stat_date AS d, SUM(clicks) AS n FROM analytics_daily WHERE stat_date >= ? GROUP BY stat_date`,
+			func(d *service.DayStats, n int64) { d.Clicks = n }},
+	} {
+		var rows []struct {
+			D time.Time `db:"d"`
+			N int64     `db:"n"`
+		}
+		if err := r.db.SelectContext(ctx, &rows, part.q, since); err != nil {
+			return nil, fmt.Errorf("repository: stats per day: %w", err)
+		}
+		for _, row := range rows {
+			part.set(day(row.D), row.N)
+		}
+	}
+	for _, d := range days {
+		st.Daily = append(st.Daily, *d)
+	}
+	slices.SortFunc(st.Daily, func(a, b service.DayStats) int { return a.Date.Compare(b.Date) })
+
+	// JOIN drops links deleted since: their clicks stay in the daily totals.
+	const top = `
+		SELECT l.short_code AS code, SUM(a.clicks) AS clicks
+		FROM analytics_daily a
+		JOIN links l ON l.id = a.link_id
+		WHERE a.stat_date >= ?
+		GROUP BY a.link_id, l.short_code
+		ORDER BY clicks DESC, a.link_id DESC
+		LIMIT ?`
+	var tops []struct {
+		Code   string `db:"code"`
+		Clicks int64  `db:"clicks"`
+	}
+	if err := r.db.SelectContext(ctx, &tops, top, since, service.TopLinksLimit); err != nil {
+		return nil, fmt.Errorf("repository: stats top links: %w", err)
+	}
+	for _, t := range tops {
+		st.TopLinks = append(st.TopLinks, service.TopLink{Code: t.Code, Clicks: t.Clicks})
+	}
+	return st, nil
 }

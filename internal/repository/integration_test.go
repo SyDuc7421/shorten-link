@@ -69,6 +69,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"004_links_expires_at_datetime.up.sql",
 		"005_links_short_code_case_sensitive.up.sql",
 		"006_admin.up.sql",
+		"007_analytics_daily_primary_key.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {
@@ -781,5 +782,61 @@ func TestLinkMySQL_BatchUpdateClicks_DailyRows(t *testing.T) {
 	if len(rows) != 2 || rows[0].LinkID != 10 || rows[0].Clicks != 5 || rows[1].LinkID != 20 || rows[1].Clicks != 1 ||
 		!rows[0].IsToday || !rows[1].IsToday {
 		t.Errorf("want a=5 and b=1 for today, got %+v", rows)
+	}
+}
+
+// TestAnalyticsDaily_UpsertDoesNotBlockNewRowInGap replays the lock pattern
+// of two concurrent BatchUpdateClicks transactions. A upserts an existing
+// day row; B then inserts a new day row whose key falls next to it. With a
+// secondary unique key, A's duplicate-key upsert holds a gap lock that blocks
+// B, and A's next update (waiting on B) closes a deadlock. With the day key
+// as the primary key, A holds only a record lock and B goes through.
+func TestAnalyticsDaily_UpsertDoesNotBlockNewRowInGap(t *testing.T) {
+	db := setupMySQL(t)
+	ctx := context.Background()
+	mustExec(t, db, `INSERT INTO users (id, email, password_hash) VALUES (1, 'a@b.com', 'x')`)
+	mustExec(t, db, `INSERT INTO links (id, user_id, short_code, original_url) VALUES
+		(10, 1, 'x', 'https://e.com'), (16, 1, 'b', 'https://e.com'), (20, 1, 'a', 'https://e.com')`)
+	mustExec(t, db, `INSERT INTO analytics_daily (link_id, stat_date, clicks) VALUES (10, UTC_DATE(), 1), (20, UTC_DATE(), 1)`)
+
+	const upsert = `
+		INSERT INTO analytics_daily (link_id, stat_date, clicks)
+		SELECT id, UTC_DATE(), ? FROM links WHERE short_code = ?
+		ON DUPLICATE KEY UPDATE analytics_daily.clicks = analytics_daily.clicks + ?`
+
+	txA, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txA.Rollback() //nolint:errcheck
+	if _, err := txA.ExecContext(ctx, `UPDATE links SET clicks = clicks + 1 WHERE short_code = 'a'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txA.ExecContext(ctx, upsert, 1, "a", 1); err != nil { // duplicate of (20, today)
+		t.Fatal(err)
+	}
+
+	txB, err := db.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer txB.Rollback() //nolint:errcheck
+	if _, err := txB.ExecContext(ctx, `UPDATE links SET clicks = clicks + 1 WHERE short_code = 'b'`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := txB.ExecContext(ctx, upsert, 1, "b", 1) // new row (16, today), between 10 and 20
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("B's upsert: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		txA.Rollback() //nolint:errcheck // release A so B's goroutine can finish
+		<-done //nolint:errcheck // only waiting for the goroutine to exit
+		t.Fatal("B's insert of a new day row is blocked by A's upsert of a neighbouring row (gap lock): two workers can deadlock")
 	}
 }

@@ -44,7 +44,8 @@ so running it twice does nothing the second time.
 
 ### `analytics_daily`
 
-Clicks per link per UTC day, one row per `(link_id, stat_date)`. The worker
+Clicks per link per UTC day; the primary key is `(link_id, stat_date)` (since
+007). The worker
 adds to it in the same transaction as `links.clicks`; `/api/admin/stats` reads
 it. There is no foreign key, so rows of a deleted link stay (they still count
 in daily totals). Days before this table was first written have no rows.
@@ -67,10 +68,11 @@ code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 | 004 | `links.expires_at` → `DATETIME` | `TIMESTAMP` cannot store dates after 2038-01-19, so long expiries failed |
 | 005 | `links.short_code` → `utf8mb4_bin` | The default collation ignores letter case: `/Sale` and `/sale` hit the same row, and generated codes differing only in case collided |
 | 006 | `users.role`, `users.disabled_at`, `links.disabled_at`, index `audit_log(created_at)` | Admin site: who may administer, and disabling without deleting |
+| 007 | `analytics_daily`: primary key `(link_id, stat_date)`, surrogate `id` dropped | With a secondary unique key, the worker's upsert took gap locks and two workers could deadlock |
 
 ## Writing a migration
 
-1. Use the next number: `007_what_it_does.up.sql` and `.down.sql`.
+1. Use the next number: `008_what_it_does.up.sql` and `.down.sql`.
 2. Start the file with a comment that says **why**, not only what. The history
    table above is built from those comments.
 3. Write the `down` file even if you hope never to run it. If it can fail on

@@ -56,7 +56,10 @@ translate them:
   whole batch is counted, totals and per-day rows together, or none of it is.
   A code whose link was deleted since the click updates nothing and is
   skipped. Sorting the codes means concurrent workers take row locks in the
-  same order and cannot deadlock.
+  same order and cannot deadlock. That relies on `(link_id, stat_date)` being
+  the **primary key** (migration 007): a duplicate primary key locks only the
+  row, while a duplicate secondary unique key also locks the gap before it,
+  which can block another worker's new row and close a cycle.
 
 ## Users in MySQL (`user_mysql.go`)
 

@@ -399,3 +399,33 @@ func TestAdminMySQL_Stats_DisabledLinksIncludeDisabledOwners(t *testing.T) {
 		t.Errorf("want 3 disabled links matching the list, got total %d, list %d", st.Totals.DisabledLinks, len(disabled))
 	}
 }
+
+func TestAdminMySQL_CreateAdmin(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewAdminMySQL(db)
+	users := repository.NewUserMySQL(db)
+	ctx := context.Background()
+
+	u := &service.User{ID: 5, Email: "admin@x.com", PasswordHash: "h", Plan: "free", Role: service.RoleAdmin, QuotaDaily: 100}
+	if err := repo.CreateAdmin(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	got, err := users.GetByEmail(ctx, "admin@x.com")
+	if err != nil || got.Role != service.RoleAdmin || got.ID != 5 {
+		t.Fatalf("want admin user 5, got %+v, %v", got, err)
+	}
+	rows := auditRows(t, db, "admin.grant")
+	if len(rows) != 1 || rows[0]["user_id"] != int64(0) || rows[0]["resource_id"] != int64(5) ||
+		rows[0]["meta"].(map[string]any)["created"] != true {
+		t.Errorf("want one admin.grant row by system with created=true, got %v", rows)
+	}
+
+	dup := *u
+	dup.ID = 6
+	if err := repo.CreateAdmin(ctx, &dup); !errors.Is(err, service.ErrEmailTaken) {
+		t.Errorf("duplicate email: want ErrEmailTaken, got %v", err)
+	}
+	if len(auditRows(t, db, "admin.grant")) != 1 {
+		t.Error("failed create wrote an audit row")
+	}
+}

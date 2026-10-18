@@ -226,6 +226,34 @@ func (s *AdminService) ListAudit(ctx context.Context, f AuditFilter) ([]*AuditEn
 	return entries, nil
 }
 
+// CreateAdmin makes email an admin, creating the account with password if it
+// does not exist yet. For an existing account it only grants the role and
+// leaves the password alone (password may then be empty). Used by the CLI to
+// seed the first admin; created reports whether a new account was made.
+func (s *AdminService) CreateAdmin(ctx context.Context, id int64, email, password string) (created bool, err error) {
+	email = normalizeEmail(email)
+	_, err = s.users.GetByEmail(ctx, email)
+	if err == nil {
+		if _, err := s.SetAdmin(ctx, email, true); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return false, fmt.Errorf("service: create admin lookup: %w", err)
+	}
+
+	u, err := newUser(id, email, password)
+	if err != nil {
+		return false, err
+	}
+	u.Role = RoleAdmin
+	if err := s.repo.CreateAdmin(ctx, u); err != nil {
+		return false, fmt.Errorf("service: create admin: %w", err)
+	}
+	return true, nil
+}
+
 // SetAdmin grants (admin=true) or revokes the admin role by email. Used by the
 // CLI; the audit row has actor 0 (system).
 func (s *AdminService) SetAdmin(ctx context.Context, email string, admin bool) (bool, error) {

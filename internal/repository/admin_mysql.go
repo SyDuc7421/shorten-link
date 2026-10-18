@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 
 	"github.com/april/shorten-link/internal/service"
@@ -250,6 +251,23 @@ func (r *adminMySQL) SetRole(ctx context.Context, actorID int64, email, role str
 		return insertAudit(ctx, tx, actorID, action, "user", row.ID, "", nil)
 	})
 	return changed, err
+}
+
+func (r *adminMySQL) CreateAdmin(ctx context.Context, u *service.User) error {
+	return r.inTx(ctx, func(tx *sqlx.Tx) error {
+		const q = `
+			INSERT INTO users (id, email, password_hash, plan, role, quota_daily)
+			VALUES (?, ?, ?, ?, ?, ?)`
+		_, err := tx.ExecContext(ctx, q, u.ID, u.Email, u.PasswordHash, u.Plan, u.Role, u.QuotaDaily)
+		var myErr *mysql.MySQLError
+		if errors.As(err, &myErr) && myErr.Number == mysqlErrDuplicateEntry {
+			return service.ErrEmailTaken
+		}
+		if err != nil {
+			return fmt.Errorf("repository: create admin: %w", err)
+		}
+		return insertAudit(ctx, tx, 0, "admin.grant", "user", u.ID, "", map[string]any{"created": true})
+	})
 }
 
 // --- links ---

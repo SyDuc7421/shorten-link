@@ -88,7 +88,7 @@ search is `LIKE '%q%'` with `%`, `_` and `\` in the query escaped
 | `expired` | `expires_at` in the past |
 
 **Writes** (`SetUserQuota`, `SetUserDisabled`, `SetLinkDisabled`,
-`DeleteLink`, `SetRole`) each run in one transaction: lock the row with
+`DeleteLink`, `SetRole`, `CreateAdmin`) each run in one transaction: lock the row with
 `SELECT ... FOR UPDATE`, change it, and insert the `audit_log` row. If any step
 fails, nothing is kept, so there is never a change without its audit entry.
 When the row is already in the requested state (same disabled flag, role or

@@ -80,6 +80,26 @@ func NewAuthService(
 	}
 }
 
+// newUser builds a user on the free plan with a bcrypt hash of password.
+// email must already be normalized.
+func newUser(id int64, email, password string) (*User, error) {
+	if err := validatePassword(password); err != nil {
+		return nil, err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("service: hash password: %w", err)
+	}
+	return &User{
+		ID:           id,
+		Email:        email,
+		PasswordHash: string(hash),
+		Plan:         "free",
+		Role:         RoleUser,
+		QuotaDaily:   100,
+	}, nil
+}
+
 // Register creates a new user and returns a token pair.
 func (s *AuthService) Register(ctx context.Context, email, password string) (*TokenPair, error) {
 	email = normalizeEmail(email)
@@ -93,17 +113,9 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*To
 		return nil, fmt.Errorf("service: register lookup: %w", err)
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	user, err := newUser(s.gen.NextID(), email, password)
 	if err != nil {
-		return nil, fmt.Errorf("service: hash password: %w", err)
-	}
-
-	user := &User{
-		ID:           s.gen.NextID(),
-		Email:        email,
-		PasswordHash: string(hash),
-		Plan:         "free",
-		QuotaDaily:   100,
+		return nil, err
 	}
 	if err := s.users.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("service: register create: %w", err)

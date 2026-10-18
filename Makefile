@@ -1,4 +1,4 @@
-.PHONY: run build test migrate lint docker-up admin-grant admin-revoke
+.PHONY: run build test migrate lint docker-up admin-grant admin-revoke seed-admin
 
 run:
 	set -a && . ./.env && set +a && go run ./cmd/server
@@ -30,3 +30,10 @@ admin-grant:
 
 admin-revoke:
 	set -a && . ./.env && set +a && go run ./cmd/server admin revoke "$(EMAIL)"
+
+# Create the dev admin from ADMIN_EMAIL / ADMIN_PASSWORD in .env (idempotent:
+# an existing account is only granted the role, its password is kept).
+seed-admin:
+	set -a && . ./.env && set +a && \
+	if [ -z "$$ADMIN_EMAIL" ]; then echo "set ADMIN_EMAIL and ADMIN_PASSWORD in .env"; exit 2; fi && \
+	go run ./cmd/server admin create "$$ADMIN_EMAIL"

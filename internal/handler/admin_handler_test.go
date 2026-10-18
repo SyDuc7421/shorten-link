@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/april/shorten-link/internal/handler"
 	"github.com/april/shorten-link/internal/service"
@@ -28,6 +29,11 @@ type mockAdminSvc struct {
 	enableLinkFn  func(ctx context.Context, actorID int64, code, reason string) (*service.AdminLink, error)
 	deleteLinkFn  func(ctx context.Context, actorID int64, code, reason string) error
 	listAuditFn   func(ctx context.Context, f service.AuditFilter) ([]*service.AuditEntry, error)
+	statsFn       func(ctx context.Context, days int) (*service.Stats, error)
+}
+
+func (m *mockAdminSvc) Stats(ctx context.Context, days int) (*service.Stats, error) {
+	return m.statsFn(ctx, days)
 }
 
 func (m *mockAdminSvc) Me(ctx context.Context, userID int64) (*service.User, error) {
@@ -323,9 +329,48 @@ func TestAdminHandler_RoutesRequireAdmin(t *testing.T) {
 		{"POST", "/api/admin/links/abc/enable"},
 		{"DELETE", "/api/admin/links/abc"},
 		{"GET", "/api/admin/audit"},
+		{"GET", "/api/admin/stats"},
 	} {
 		if w := adminDo(mux, r.method, r.path, ""); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s: want 403, got %d", r.method, r.path, w.Code)
 		}
+	}
+}
+
+func TestAdminHandler_Stats(t *testing.T) {
+	var gotDays int
+	mux := newAdminMux(&mockAdminSvc{statsFn: func(_ context.Context, days int) (*service.Stats, error) {
+		gotDays = days
+		if days > service.MaxStatsDays || days < 1 {
+			return nil, service.ErrInvalidDays
+		}
+		return &service.Stats{
+			Totals: service.StatsTotals{Users: 3, Links: 2, Clicks: 9, DisabledUsers: 1},
+			Daily:  []service.DayStats{{Date: time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC), NewUsers: 1, Clicks: 9}},
+		}, nil
+	}})
+
+	w := adminDo(mux, "GET", "/api/admin/stats", "")
+	if w.Code != http.StatusOK || gotDays != service.DefaultStatsDays {
+		t.Fatalf("default: got %d days=%d", w.Code, gotDays)
+	}
+	want := `{"daily":[{"clicks":9,"date":"2026-10-18","new_links":0,"new_users":1}],` +
+		`"top_links":[],` +
+		`"totals":{"clicks":9,"disabled_links":0,"disabled_users":1,"links":2,"users":3}}`
+	if strings.TrimSpace(w.Body.String()) != want {
+		t.Errorf("body:\n got %s\nwant %s", w.Body.String(), want)
+	}
+
+	if w := adminDo(mux, "GET", "/api/admin/stats?days=7", ""); w.Code != http.StatusOK || gotDays != 7 {
+		t.Errorf("days=7: got %d days=%d", w.Code, gotDays)
+	}
+	for _, q := range []string{"0", "91"} {
+		if w := adminDo(mux, "GET", "/api/admin/stats?days="+q, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("days=%s: want 400, got %d", q, w.Code)
+		}
+	}
+	gotDays = -1
+	if w := adminDo(mux, "GET", "/api/admin/stats?days=abc", ""); w.Code != http.StatusBadRequest || gotDays != -1 {
+		t.Errorf("days=abc: want 400 without calling the service, got %d (days=%d)", w.Code, gotDays)
 	}
 }

@@ -28,6 +28,7 @@ type AdminServicer interface {
 	EnableLink(ctx context.Context, actorID int64, code, reason string) (*service.AdminLink, error)
 	DeleteLink(ctx context.Context, actorID int64, code, reason string) error
 	ListAudit(ctx context.Context, f service.AuditFilter) ([]*service.AuditEntry, error)
+	Stats(ctx context.Context, days int) (*service.Stats, error)
 }
 
 // AdminHandler holds the HTTP handlers under /api/admin.
@@ -57,6 +58,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux, requireAuth, requireAdmin fu
 	mux.Handle("POST /api/admin/links/{code}/enable", guard(h.EnableLink))
 	mux.Handle("DELETE /api/admin/links/{code}", guard(h.DeleteLink))
 	mux.Handle("GET /api/admin/audit", guard(h.ListAudit))
+	mux.Handle("GET /api/admin/stats", guard(h.Stats))
 }
 
 // --- JSON shapes. IDs are strings: snowflake IDs exceed 2^53, which a
@@ -191,6 +193,8 @@ func writeAdminError(w http.ResponseWriter, err error, notFoundMsg string) {
 		writeError(w, http.StatusConflict, "cannot disable yourself")
 	case errors.Is(err, service.ErrInvalidQuota):
 		writeError(w, http.StatusBadRequest, "quota_daily must be 0-100000")
+	case errors.Is(err, service.ErrInvalidDays):
+		writeError(w, http.StatusBadRequest, "days must be 1-90")
 	case errors.Is(err, service.ErrReasonTooLong):
 		writeError(w, http.StatusBadRequest, "reason must be at most 500 bytes")
 	default:
@@ -405,3 +409,46 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+
+// Stats handles GET /api/admin/stats?days=
+func (h *AdminHandler) Stats(w http.ResponseWriter, r *http.Request) {
+	days := service.DefaultStatsDays
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "days must be 1-90")
+			return
+		}
+		days = n
+	}
+	st, err := h.svc.Stats(r.Context(), days)
+	if err != nil {
+		writeAdminError(w, err, "")
+		return
+	}
+
+	daily := make([]map[string]any, len(st.Daily))
+	for i, d := range st.Daily {
+		daily[i] = map[string]any{
+			"date":      d.Date.Format("2006-01-02"),
+			"new_users": d.NewUsers,
+			"new_links": d.NewLinks,
+			"clicks":    d.Clicks,
+		}
+	}
+	top := make([]map[string]any, len(st.TopLinks))
+	for i, t := range st.TopLinks {
+		top[i] = map[string]any{"code": t.Code, "clicks": t.Clicks}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"totals": map[string]any{
+			"users":          st.Totals.Users,
+			"links":          st.Totals.Links,
+			"clicks":         st.Totals.Clicks,
+			"disabled_users": st.Totals.DisabledUsers,
+			"disabled_links": st.Totals.DisabledLinks,
+		},
+		"daily":     daily,
+		"top_links": top,
+	})
+}

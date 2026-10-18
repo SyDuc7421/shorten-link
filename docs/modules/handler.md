@@ -40,6 +40,7 @@ repositories.
 | `POST /api/admin/links/{code}/enable` | admin | `AdminHandler.EnableLink` | `admin.go` |
 | `DELETE /api/admin/links/{code}` | admin | `AdminHandler.DeleteLink` | `admin.go` |
 | `GET /api/admin/audit` | admin | `AdminHandler.ListAudit` | `admin.go` |
+| `GET /api/admin/stats` | admin | `AdminHandler.Stats` | `admin.go` |
 | `GET /healthz` | — | `HealthChecker.Health` | `health.go` |
 | `GET /docs`, `GET /api/openapi.yaml` | — | `RegisterDocs` | `docs.go` |
 
@@ -122,7 +123,9 @@ than 2^53, and a JavaScript `number` would silently round them. Lists return
 `{"users"|"links"|"entries": [...], "next_cursor": "..."}`, 20 rows, newest
 first; `next_cursor` is the last row's ID when the page is full and `""` on the
 last page. User detail endpoints add `links_today` and `total_clicks`. An audit
-entry's `actor` is `null` for the `server admin` command.
+entry's `actor` is `null` for the `server admin` command. `GET /stats`
+returns `{"totals": {...}, "daily": [{"date": "YYYY-MM-DD", ...}], "top_links": [...]}`;
+`days` defaults to 30 and both arrays are `[]`, never `null`.
 
 **Input.** `id`, `cursor`, `user_id` and `actor_id` must be positive integers,
 `status` and `resource_type` one of the listed values; anything else is `400`
@@ -136,6 +139,7 @@ with a message naming the parameter. Write endpoints take an optional
 | `ErrSelfDisable` | 409 | `cannot disable yourself` |
 | `ErrInvalidQuota` | 400 | `quota_daily must be 0-100000` |
 | `ErrReasonTooLong` | 400 | `reason must be at most 500 bytes` |
+| `ErrInvalidDays`, or `days` not a number | 400 | `days must be 1-90` |
 | body over 1 MB | 413 | `request body too large` |
 | anything else | 500 | `admin request failed` |
 

@@ -177,6 +177,7 @@ Every request passes through these, outermost first:
 | POST | `/api/admin/links/{code}/disable`, `/enable` | admin | Disable or enable a link (disabled → 410) |
 | DELETE | `/api/admin/links/{code}` | admin | Delete any link |
 | GET | `/api/admin/audit?actor_id=&resource_type=&cursor=` | admin | Admin action log |
+| GET | `/api/admin/stats?days=` | admin | Totals, per-day new users/links/clicks, top links (1–90 days) |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 

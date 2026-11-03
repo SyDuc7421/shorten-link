@@ -59,7 +59,7 @@ func adminMain(args []string) int {
 	}
 
 	// SetAdmin and CreateAdmin touch neither the cache nor tokens, so they are nil here.
-	svc := cliAdmin{service.NewAdminService(repository.NewAdminMySQL(db), repository.NewUserMySQL(db), nil, nil), gen}
+	svc := cliAdmin{service.NewAdminService(repository.NewAdminMySQL(db), repository.NewUserMySQL(db), nil, nil, service.NoopPublisher{}), gen}
 	// The password comes from the environment, never from argv, so it does
 	// not end up in shell history or the process list.
 	return runAdminCommand(ctx, args, svc, os.Getenv("ADMIN_PASSWORD"), os.Stdout)

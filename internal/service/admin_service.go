@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/april/shorten-link/pkg/idgen"
 )
 
@@ -17,12 +19,14 @@ type AdminService struct {
 	users  UserRepository
 	cache  LinkCache
 	tokens TokenCache
+	pub    Publisher
 }
 
 // NewAdminService constructs an AdminService. cache and tokens may be nil for
-// callers that only use SetAdmin (the CLI).
-func NewAdminService(repo AdminRepository, users UserRepository, cache LinkCache, tokens TokenCache) *AdminService {
-	return &AdminService{repo: repo, users: users, cache: cache, tokens: tokens}
+// callers that only use SetAdmin (the CLI). pub receives the link disable and
+// enable events.
+func NewAdminService(repo AdminRepository, users UserRepository, cache LinkCache, tokens TokenCache, pub Publisher) *AdminService {
+	return &AdminService{repo: repo, users: users, cache: cache, tokens: tokens, pub: pub}
 }
 
 func checkReason(reason string) error {
@@ -161,7 +165,8 @@ func (s *AdminService) setLinkDisabled(ctx context.Context, actorID int64, code 
 	if err := checkReason(reason); err != nil {
 		return nil, err
 	}
-	if _, err := s.repo.SetLinkDisabled(ctx, actorID, code, disabled, reason); err != nil {
+	changed, err := s.repo.SetLinkDisabled(ctx, actorID, code, disabled, reason)
+	if err != nil {
 		return nil, fmt.Errorf("service: set link disabled: %w", err)
 	}
 	if err := s.cache.Delete(ctx, code); err != nil {
@@ -170,6 +175,20 @@ func (s *AdminService) setLinkDisabled(ctx context.Context, actorID int64, code 
 	link, err := s.repo.GetLink(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("service: set link disabled: %w", err)
+	}
+	if changed {
+		route, prefix := RouteLinkEnabled, "enabled:"
+		if disabled {
+			route, prefix = RouteLinkDisabled, "disabled:"
+		}
+		// The admin's reason stays out of the event on purpose.
+		publishAsync(ctx, s.pub, route, NotificationEvent{
+			DedupeKey:  prefix + uuid.NewString(),
+			UserID:     link.OwnerID,
+			LinkID:     link.ID,
+			ShortCode:  link.ShortCode,
+			OccurredAt: time.Now().UTC(),
+		})
 	}
 	return link, nil
 }

@@ -97,7 +97,7 @@ func main() {
 		log.Fatal("invalid config", zap.Error(err))
 	}
 	authSvc := service.NewAuthService(userRepo, tokenCache, gen, privateKey, publicKey, mailer, resetURL)
-	adminSvc := service.NewAdminService(adminRepo, userRepo, linkCache, tokenCache)
+	adminSvc := service.NewAdminService(adminRepo, userRepo, linkCache, tokenCache, pub)
 	notificationSvc := service.NewNotificationService(notificationRepo)
 
 	// handlers

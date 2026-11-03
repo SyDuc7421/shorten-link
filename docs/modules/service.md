@@ -271,6 +271,16 @@ cache consistent with the database.
     three if they are ever seen in practice.
 - **Link disable/enable/delete** write through the repository, then delete
   `sl:<code>`.
+- **Link disable/enable events.** After the cache purge and a successful
+  `GetLink`, `DisableLink` and `EnableLink` publish `link.disabled` or
+  `link.enabled`, but only when the repository reports that the state really
+  changed. The body is a `NotificationEvent` with the owner's id, the link id
+  and code, `OccurredAt`, and a dedupe key `disabled:<uuid>` or
+  `enabled:<uuid>` (one per action). The admin's reason is never included.
+  Publishing goes through `publishAsync` (`publish.go`): a goroutine with a
+  fresh `publishTimeout` (2 s) context that logs a warning with the routing key
+  on failure. A broker problem never fails or slows the admin request, and the
+  event is lost if the publish fails. User disable/enable publishes nothing.
 - **`GetUser`** adds links created today (UTC, via `idgen.MinIDAt`) and total
   clicks.
 - **`Stats(days)`** (1–90) asks the repository for totals, the per-day rows

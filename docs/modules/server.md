@@ -39,8 +39,8 @@ exits and Docker restarts it.
 | 6 | `cfg.LoadRSAKeys` reads the JWT key pair | fatal |
 | 7 | `idgen.NewGenerator(cfg.NodeID)` | fatal if `NODE_ID` is outside 0–1023 |
 | 8 | `PASSWORD_RESET_URL` is parsed and checked. The mailer is SMTP when `SMTP_HOST` is set, otherwise log-only, which is allowed only when the reset URL is on localhost | fatal |
-| 9 | Repositories → services → handlers are constructed (including `AdminService`, which `RequireAdmin` also uses) | — |
-| 10 | Routes are registered on one `http.ServeMux` | — |
+| 9 | Repositories → services → handlers are constructed (including `AdminService`, which `RequireAdmin` also uses, and `NotificationService` for `/api/notifications`) | — |
+| 10 | Routes are registered on one `http.ServeMux` (the notification routes sit behind `RequireAuth` and have no extra rate limit) | — |
 | 11 | The mux is wrapped in rate limits, then in the middleware chain | — |
 | 12 | `ListenAndServe` starts in a goroutine | fatal |
 

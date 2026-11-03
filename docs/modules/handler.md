@@ -12,7 +12,7 @@ about links or users in a handler, it belongs in [service](service.md).
 
 **Where it sits.** `cmd/server` builds the handlers and calls their `Register`
 methods. Handlers depend on small interfaces they declare themselves
-(`LinkServicer`, `AuthServicer`, `ConnStatus`), never on concrete services or
+(`LinkServicer`, `AuthServicer`, `NotificationServicer`, `ConnStatus`), never on concrete services or
 repositories.
 
 ## Routes
@@ -41,6 +41,9 @@ repositories.
 | `DELETE /api/admin/links/{code}` | admin | `AdminHandler.DeleteLink` | `admin.go` |
 | `GET /api/admin/audit` | admin | `AdminHandler.ListAudit` | `admin.go` |
 | `GET /api/admin/stats` | admin | `AdminHandler.Stats` | `admin.go` |
+| `GET /api/notifications?cursor=` | ✔ | `NotificationHandler.List` | `notification.go` |
+| `POST /api/notifications/{id}/read` | ✔ | `NotificationHandler.MarkRead` | `notification.go` |
+| `POST /api/notifications/read-all` | ✔ | `NotificationHandler.ReadAll` | `notification.go` |
 | `GET /healthz` | — | `HealthChecker.Health` | `health.go` |
 | `GET /docs`, `GET /api/openapi.yaml` | — | `RegisterDocs` | `docs.go` |
 

@@ -179,6 +179,9 @@ Every request passes through these, outermost first:
 | DELETE | `/api/admin/links/{code}` | admin | Delete any link |
 | GET | `/api/admin/audit?actor_id=&resource_type=&cursor=` | admin | Admin action log |
 | GET | `/api/admin/stats?days=` | admin | Totals, per-day new users/links/clicks, top links (1–90 days) |
+| GET | `/api/notifications?cursor=` | ✔ | Your notifications, newest first, 20 per page, plus the unread count |
+| POST | `/api/notifications/{id}/read` | ✔ | Mark one of your notifications read (`404` if it is not yours) |
+| POST | `/api/notifications/read-all` | ✔ | Mark all your notifications read |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 

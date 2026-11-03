@@ -16,6 +16,7 @@ interfaces it declares itself, in `link.go`, `auth.go` and `admin.go`:
 | `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
 | `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
 | `AdminRepository` | `repository.adminMySQL` | Admin lists and audited writes |
+| `NotificationRepository` | `repository.notificationMySQL` | Store and read in-app notifications, find links about to expire |
 
 Because the interfaces live here, service tests use small in-file mocks and
 run without any database.
@@ -284,6 +285,28 @@ cache consistent with the database.
   `admin.grant` audit row (metadata `created: true`) in one transaction.
 - **`SetAdmin(email, admin)`** is for the CLI: it lower-cases the email and
   sets the role with actor `0` (system).
+
+## Notifications (`notification.go`, `notification_service.go`)
+
+`notification.go` holds the shared vocabulary: the `Notification` row, the
+`NotificationEvent` that travels over RabbitMQ, the four types
+(`link_disabled`, `link_enabled`, `link_expiring`, `password_changed`), their
+routing keys, `ExpiryWarningWindow` (24 h), `NotificationPageSize` (20) and the
+`NotificationRepository` interface.
+
+`NotificationService` is what the API server uses to let a user read their own
+notifications. It is thin and has no rules of its own beyond scoping every call
+to the user id:
+
+- **`List(userID, beforeID)`** returns one page of `NotificationPageSize`
+  rows, newest first, with ids below `beforeID` (0 = from the newest), and the
+  user's unread count. These are two queries, so the count can be a moment out
+  of step with the page.
+- **`MarkRead(userID, id)`** passes `ErrNotFound` through for a missing id and
+  for another user's id alike, so a user cannot probe for other ids.
+- **`MarkAllRead(userID)`** marks every unread row of that user.
+
+Notifications are created elsewhere (the worker); the service never inserts.
 
 ## Before you change it
 

@@ -75,6 +75,13 @@ WAF, captcha, payments.
 | FR-ADM8 | Dashboard numbers (totals, per-day series) | ✅ `GET /api/admin/stats`, up to 90 days |
 | FR-ADM9 | Admin web UI | ❌ planned (plan 3, `shorten-link-gui`) |
 
+### 2.4a Notifications
+
+| ID | Requirement | Status |
+|---|---|---|
+| FR-N1 | A signed-in user lists their notifications, newest first, 20 per page (`GET /api/notifications?cursor=`), with the unread count | ✅ API only; events that create notifications are added in later tasks |
+| FR-N2 | A user marks one notification (`POST /api/notifications/{id}/read`) or all (`/read-all`) read; another user's id answers `404` | ✅ |
+
 ### 2.5 Operations endpoints
 
 | ID | Requirement | Status |

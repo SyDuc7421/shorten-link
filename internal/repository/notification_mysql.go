@@ -21,8 +21,9 @@ func NewNotificationMySQL(db *sqlx.DB) service.NotificationRepository {
 
 func (r *notificationMySQL) Insert(ctx context.Context, n *service.Notification, dedupeKey string) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT IGNORE INTO notifications (user_id, type, link_id, short_code, expires_at, dedupe_key)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO notifications (user_id, type, link_id, short_code, expires_at, dedupe_key)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key`,
 		n.UserID, n.Type, n.LinkID, n.ShortCode, n.ExpiresAt, dedupeKey)
 	if err != nil {
 		return fmt.Errorf("repository: insert notification: %w", err)

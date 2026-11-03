@@ -115,8 +115,10 @@ nothing to say. `user_id` is the acting admin, `0` for the CLI.
 
 ## Notifications in MySQL (`notification_mysql.go`)
 
-`Insert` uses `INSERT IGNORE` on the unique `dedupe_key`, so a redelivered
-event or a second scanner pass stores nothing and is not an error. `ListByUser`
+`Insert` uses `ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key` on the unique
+`dedupe_key`, so a redelivered event or a second scanner pass stores nothing and
+is not an error. (`INSERT IGNORE` is avoided: it would also turn a too-long
+value or a NOT NULL violation into a warning and lose the notification.) `ListByUser`
 pages newest first by id (`id < beforeID`). `MarkRead` sets
 `read_at = COALESCE(read_at, UTC_TIMESTAMP())`; because MySQL counts only
 changed rows, a second call affects 0 rows, so it checks that the row exists

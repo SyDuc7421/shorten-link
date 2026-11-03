@@ -183,3 +183,12 @@ func TestNotificationMySQL_ExpiringLinks(t *testing.T) {
 		t.Fatalf("got %+v, want only link A", got)
 	}
 }
+
+func TestNotificationMySQL_InsertSurfacesOtherErrors(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewNotificationMySQL(db)
+	n := &service.Notification{UserID: 1, Type: service.NotificationLinkDisabled, LinkID: ptr(int64(7)), ShortCode: ptr("this-code-is-way-too-long")}
+	if err := repo.Insert(context.Background(), n, "disabled:long"); err == nil {
+		t.Fatal("want error for short_code longer than 16 chars, got nil")
+	}
+}

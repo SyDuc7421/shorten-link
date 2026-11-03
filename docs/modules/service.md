@@ -220,12 +220,11 @@ In the background:
 2. Consume the token by its hash (atomic, single use). Unknown, expired or used:
    `ErrInvalidToken`.
 3. Load the user and bcrypt the new password.
-4. **Revoke all sessions**, then update the password hash, then **revoke again**
-   (retried up to 3 times). The first revoke means that if anything later
-   fails, the existing sessions are already gone. The second catches a login
-   with the old password or a refresh that was in flight during the change.
-5. Tell the user, in the background, so neither can fail a reset that has
-   already succeeded. `now` is taken once (UTC) after the second revoke.
+4. **Revoke all sessions**, then update the password hash.
+5. Tell the user, in the background, so neither can fail the reset. This runs
+   right after the hash is saved, before the second revoke: from that point
+   the password has changed, so the owner is told even if the second revoke
+   then fails and the call returns an error. `now` is taken once (UTC).
    `publishAsync` publishes `user.password_changed` with a `NotificationEvent`
    (`DedupeKey` `password:<uuid>`, the user id, `OccurredAt` = `now`, no link);
    the worker turns it into an in-app `password_changed` notification. And
@@ -234,7 +233,11 @@ In the background:
    path segment replaced by `forgot-password` and no query. The mail has no
    token. If RabbitMQ is down the notification is lost and the reset still
    succeeds; a failed mail is only logged.
-6. Clear the lockout counter and the reset pointer.
+6. **Revoke again** (retried up to 3 times). The first revoke means that if
+   anything later fails, the existing sessions are already gone. The second
+   catches a login with the old password or a refresh that was in flight
+   during the change.
+7. Clear the lockout counter and the reset pointer.
 
 If the first revoke fails, the password is left unchanged and the call fails.
 In every failure case the token is already consumed and the user requests a new

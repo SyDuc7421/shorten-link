@@ -870,6 +870,33 @@ func TestResetPassword_InvalidTokenNoNotify(t *testing.T) {
 	}
 }
 
+// Once the new hash is saved the password has changed, even if the reset then
+// fails because sessions could not be revoked. The owner must still be told.
+func TestResetPassword_RevokeFailsAfterChange_StillNotifies(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	pub := newChanPub(nil)
+	svc, mailer := newAuthSvcWithPub(t, users, tokens, pub)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	// first revoke ok, every retry after the change fails
+	down := errors.New("redis timeout")
+	tokens.revokeErrs = []error{nil, down, down, down}
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err == nil {
+		t.Fatal("want error when sessions cannot be revoked after the change")
+	}
+	select {
+	case m := <-mailer.changed:
+		if m.to != "a@x.com" {
+			t.Errorf("mail to %q, want a@x.com", m.to)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no password-changed mail sent")
+	}
+	if c, ok := pub.next(t, 2*time.Second); !ok || c.key != service.RoutePasswordChanged {
+		t.Fatalf("want a %s event, got %+v (ok=%v)", service.RoutePasswordChanged, c, ok)
+	}
+}
+
 func TestResetPassword_PublishFailureStillMails(t *testing.T) {
 	users, tokens := newMockUserRepo(), newMockTokenCache()
 	pub := newChanPub(errors.New("broker down"))

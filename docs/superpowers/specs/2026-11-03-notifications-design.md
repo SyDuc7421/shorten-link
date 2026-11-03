@@ -106,8 +106,9 @@ event) and `expiring:<link_id>` for the reminder (at most one per link, ever).
 
 - `AuthService` gets a `Publisher` too (wired in `cmd/server` with the same
   publisher; tests pass `NoopPublisher`).
-- At the end of `ResetPassword`, after the password hash is saved and sessions
-  are revoked (i.e. only on success), publish `user.password_changed` with the
+- In `ResetPassword`, right after the password hash is saved (before the
+  second session revoke, so the owner is told even if that revoke fails and
+  the reset returns an error), publish `user.password_changed` with the
   user id. Same rules as the admin events: short timeout, log a warning on
   failure, never fail the reset because of it.
 - If a logged-in "change password" endpoint is added later, it should publish

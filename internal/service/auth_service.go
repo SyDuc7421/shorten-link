@@ -303,18 +303,9 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	if err := s.users.UpdatePasswordHash(ctx, userID, string(hash)); err != nil {
 		return fmt.Errorf("service: update password: %w", err)
 	}
-	var revokeErr error
-	for range revokeAttempts {
-		if revokeErr = s.tokens.RevokeAllRefreshTokens(ctx, userID, time.Now(), refreshTokenTTL); revokeErr == nil {
-			break
-		}
-	}
-	if revokeErr != nil {
-		return fmt.Errorf("service: revoke sessions after password change: %w", revokeErr)
-	}
-
-	// Tell the user. Both run in the background: a broker or mail outage
-	// must not fail a reset that has already succeeded.
+	// The password has changed from here on, so tell the user now, even if
+	// the revoke below fails and the reset returns an error. Both run in the
+	// background: a broker or mail outage must not fail the reset.
 	now := time.Now().UTC()
 	publishAsync(ctx, s.pub, RoutePasswordChanged, NotificationEvent{
 		DedupeKey:  "password:" + uuid.NewString(),
@@ -324,6 +315,16 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	s.runAsync(func(ctx context.Context) {
 		s.mailer.SendPasswordChanged(ctx, user.Email, now, s.forgotURL) //nolint:errcheck // the mailer logs failures
 	})
+
+	var revokeErr error
+	for range revokeAttempts {
+		if revokeErr = s.tokens.RevokeAllRefreshTokens(ctx, userID, time.Now(), refreshTokenTTL); revokeErr == nil {
+			break
+		}
+	}
+	if revokeErr != nil {
+		return fmt.Errorf("service: revoke sessions after password change: %w", revokeErr)
+	}
 
 	s.tokens.DeleteLockout(ctx, user.Email)   //nolint:errcheck
 	s.tokens.DeletePasswordReset(ctx, userID) //nolint:errcheck

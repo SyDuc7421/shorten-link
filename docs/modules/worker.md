@@ -1,7 +1,8 @@
 # `cmd/worker`: the click counter
 
 **What it does.** The second program built from this codebase. It reads click
-events from RabbitMQ and adds them to each link's `clicks` column in MySQL.
+events from RabbitMQ and adds them to each link's `clicks` column in MySQL. It
+also reads notification events and stores them in the `notifications` table.
 It has no HTTP server.
 
 **Where it sits.** It uses `config`, `internal/messaging` and
@@ -15,8 +16,11 @@ memory; they only meet through RabbitMQ and MySQL.
    worker has nothing useful to do without them, so it exits and lets Docker
    restart it.
 3. `messaging.Setup` declares the exchanges and queues.
-4. Open one channel per consumer and start `ClickConsumer` and `DLQConsumer`,
-   each in its own goroutine. The details of batching and dead-lettering are in
+4. Open one channel per consumer and start four consumers, each in its own
+   goroutine: `ClickConsumer`, a `DLQConsumer` on `clicks.dlq`, the
+   `NotificationConsumer` (writes notification rows to MySQL) and a
+   `DLQConsumer` on `notifications.dlq`. The details of batching and
+   dead-lettering are in
    [messaging.md](messaging.md#the-consumers-consumergo).
 5. Wait in `waitForShutdown`.
 
@@ -25,7 +29,7 @@ memory; they only meet through RabbitMQ and MySQL.
 `waitForShutdown` returns when either:
 
 - **a signal arrives** (`SIGINT`, `SIGTERM`): it cancels the context, waits for
-  both consumers to return (the click consumer flushes its last batch first),
+  all four consumers to return (the click consumer flushes its last batch first),
   and the process exits 0; or
 - **a consumer stops on its own**, usually because the RabbitMQ connection
   dropped: it cancels the other consumer, waits for it, and the process exits

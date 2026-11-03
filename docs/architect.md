@@ -194,12 +194,12 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | Package | Responsibility | Read this first |
 |---|---|---|
 | `cmd/server` | Wires everything together, builds the middleware chain, graceful shutdown | `main.go` |
-| `cmd/worker` | Starts the click and DLQ consumers, shuts down cleanly | `main.go` |
+| `cmd/worker` | Starts the click, notification and DLQ consumers, shuts down cleanly | `main.go` |
 | `config` | Reads env vars (`envconfig`), opens MySQL/Redis/RabbitMQ, loads RSA keys | `config.go` |
 | `internal/handler` | HTTP handlers for links, auth, health, docs | `link.go` |
 | `internal/service` | Business logic and the interfaces it depends on | `link_service.go`, `auth_service.go` |
 | `internal/repository` | MySQL (`*_mysql.go`) and Redis (`*_redis.go`) implementations | `link_mysql.go` |
-| `internal/messaging` | RabbitMQ topology, publisher, click and DLQ consumers | `setup.go` |
+| `internal/messaging` | RabbitMQ topology, publisher, click, notification and DLQ consumers | `setup.go` |
 | `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
 | `internal/ctxkey` | Typed context key for the authenticated user ID | — |
@@ -281,6 +281,8 @@ to 3 attempts.
 | `clicks` | queue | bound to `link.clicked`; dead-letters to `shortlink.dlx` |
 | `shortlink.dlx` | direct exchange | — |
 | `clicks.dlq` | queue | failed click batches end up here |
+| `notifications` | queue | bound to `link.disabled`, `link.enabled`, `link.expiring`, `user.password_changed`; dead-letters to `shortlink.dlx` with key `notifications.dead` |
+| `notifications.dlq` | queue | malformed or twice-failed notification events end up here; logged by `DLQConsumer` |
 
 `link.created` has no consumer yet; it is published for future use.
 

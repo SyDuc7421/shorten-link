@@ -67,9 +67,25 @@ func main() {
 	defer dlqCh.Close()
 
 	clickConsumer := messaging.NewClickConsumer(clickCh, repo, log)
-	dlqConsumer := messaging.NewDLQConsumer(dlqCh, log)
+	dlqConsumer := messaging.NewDLQConsumer(dlqCh, messaging.QueueDLQ, log)
 
-	errc := make(chan error, 2)
+	// notification consumer and its DLQ consumer
+	notifCh, err := mqConn.Channel()
+	if err != nil {
+		log.Fatal("failed to open notification consumer channel", zap.Error(err))
+	}
+	defer notifCh.Close()
+
+	notifDLQCh, err := mqConn.Channel()
+	if err != nil {
+		log.Fatal("failed to open notification DLQ consumer channel", zap.Error(err))
+	}
+	defer notifDLQCh.Close()
+
+	notifConsumer := messaging.NewNotificationConsumer(notifCh, repository.NewNotificationMySQL(db), log)
+	notifDLQConsumer := messaging.NewDLQConsumer(notifDLQCh, messaging.QueueNotificationsDLQ, log)
+
+	errc := make(chan error, 4)
 
 	go func() {
 		log.Info("click consumer started")
@@ -81,10 +97,20 @@ func main() {
 		errc <- dlqConsumer.Start(ctx)
 	}()
 
+	go func() {
+		log.Info("notification consumer started")
+		errc <- notifConsumer.Start(ctx)
+	}()
+
+	go func() {
+		log.Info("notification DLQ consumer started")
+		errc <- notifDLQConsumer.Start(ctx)
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if waitForShutdown(log, quit, errc, cancel, 2) {
+	if waitForShutdown(log, quit, errc, cancel, 4) {
 		log.Error("worker stopped after consumer failure")
 		log.Sync() //nolint:errcheck // os.Exit skips deferred Sync
 		os.Exit(1)

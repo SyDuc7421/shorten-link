@@ -13,6 +13,7 @@ import (
 	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/internal/messaging"
 	"github.com/april/shorten-link/internal/repository"
+	"github.com/april/shorten-link/internal/service"
 )
 
 func main() {
@@ -85,7 +86,13 @@ func main() {
 	notifConsumer := messaging.NewNotificationConsumer(notifCh, repository.NewNotificationMySQL(db), log)
 	notifDLQConsumer := messaging.NewDLQConsumer(notifDLQCh, messaging.QueueNotificationsDLQ, log)
 
-	errc := make(chan error, 4)
+	// The scanner publishes link.expiring. Like the server, the worker keeps
+	// running if a publish fails; the next scan retries.
+	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
+	defer pub.Close()
+	scanner := service.NewExpiryScanner(repository.NewNotificationMySQL(db), pub, log)
+
+	errc := make(chan error, 5)
 
 	go func() {
 		log.Info("click consumer started")
@@ -107,10 +114,15 @@ func main() {
 		errc <- notifDLQConsumer.Start(ctx)
 	}()
 
+	go func() {
+		log.Info("expiry scanner started", zap.Duration("interval", cfg.ExpiryScanInterval))
+		errc <- scanner.Run(ctx, cfg.ExpiryScanInterval)
+	}()
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if waitForShutdown(log, quit, errc, cancel, 4) {
+	if waitForShutdown(log, quit, errc, cancel, 5) {
 		log.Error("worker stopped after consumer failure")
 		log.Sync() //nolint:errcheck // os.Exit skips deferred Sync
 		os.Exit(1)

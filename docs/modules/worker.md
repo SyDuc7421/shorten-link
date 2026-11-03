@@ -3,10 +3,12 @@
 **What it does.** The second program built from this codebase. It reads click
 events from RabbitMQ and adds them to each link's `clicks` column in MySQL. It
 also reads notification events and stores them in the `notifications` table.
-It has no HTTP server.
+It also **publishes** now: a timer
+scans for links about to expire and publishes `link.expiring` events. It has
+no HTTP server.
 
-**Where it sits.** It uses `config`, `internal/messaging` and
-`internal/repository`. Nothing imports it. The server and the worker share no
+**Where it sits.** It uses `config`, `internal/messaging`,
+`internal/repository` and `internal/service` (for the expiry scanner). Nothing imports it. The server and the worker share no
 memory; they only meet through RabbitMQ and MySQL.
 
 ## What happens when it runs
@@ -22,14 +24,21 @@ memory; they only meet through RabbitMQ and MySQL.
    `DLQConsumer` on `notifications.dlq`. The details of batching and
    dead-lettering are in
    [messaging.md](messaging.md#the-consumers-consumergo).
-5. Wait in `waitForShutdown`.
+5. Create a publisher (`messaging.NewPublisher`, which reconnects on its own)
+   and start the `ExpiryScanner` in a fifth goroutine. Every
+   `EXPIRY_SCAN_INTERVAL` (default 5 minutes) it publishes `link.expiring` for
+   links that expire within 24 hours; see
+   [service.md](service.md#expiry-scanner-expiry_scannergo). A broker outage
+   only makes publishes fail and be retried on the next scan.
+6. Wait in `waitForShutdown`.
 
 ## Shutdown and failure
 
 `waitForShutdown` returns when either:
 
 - **a signal arrives** (`SIGINT`, `SIGTERM`): it cancels the context, waits for
-  all four consumers to return (the click consumer flushes its last batch first),
+  all four consumers and the scanner to
+  return (the click consumer flushes its last batch first),
   and the process exits 0; or
 - **a consumer stops on its own**, usually because the RabbitMQ connection
   dropped: it cancels the others, waits for them, and the process exits

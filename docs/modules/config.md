@@ -26,6 +26,7 @@ variable, which is better than failing on the first request.
 | `REDIS_PASSWORD` | empty | | Empty = no auth |
 | `REDIS_DB` | `0` | | |
 | `RABBITMQ_URL` | | ✔ | `amqp://user:pass@host:5672/` |
+| `EXPIRY_SCAN_INTERVAL` | `5m` | | Worker only: how often the expiry scanner looks for links expiring within 24 hours. A Go duration such as `30s` or `5m` |
 | `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` | | ✔ | PEM files, created by `make keys` |
 | `PASSWORD_RESET_URL` | `http://localhost:3000/reset-password` | | GUI page the reset email links to; `?token=` is appended. Must be an absolute http(s) URL with no query; checked at startup |
 | `SMTP_HOST` | empty | | SMTP relay. Empty = reset links go to the log, no mail is sent. **Only allowed when `PASSWORD_RESET_URL` is on localhost**; otherwise the server refuses to start |

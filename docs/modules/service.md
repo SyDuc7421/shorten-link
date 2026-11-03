@@ -308,6 +308,21 @@ to the user id:
 
 Notifications are created elsewhere (the worker); the service never inserts.
 
+### Expiry scanner (`expiry_scanner.go`)
+
+`ExpiryScanner` runs inside the worker, not the server. `ScanOnce(now)` asks
+`NotificationRepository.ExpiringLinks` for up to 500 links that expire within
+`ExpiryWarningWindow` (24 hours) and have no `expiring:<id>` notification yet,
+then publishes one `link.expiring` event per link with the dedupe key
+`expiring:<link_id>`. Each publish is synchronous and has its own
+`publishTimeout` (2 s). A failed publish is logged as a warning and skipped;
+no notification row exists yet, so the next scan finds the link again. It
+returns an error only when the repository query fails.
+
+`Run(ctx, interval)` scans once at once, then on every tick, until `ctx` is
+cancelled, and returns nil. A scan error is logged and the loop keeps going.
+Known gap: if more than 500 links qualify, the rest wait for later scans.
+
 ## Before you change it
 
 - **New rule = new test first.** The mocks at the top of `link_service_test.go`

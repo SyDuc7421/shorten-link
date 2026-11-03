@@ -277,7 +277,7 @@ to 3 attempts.
 
 | Name | Type | Notes |
 |---|---|---|
-| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked` |
+| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked`; the worker's expiry scanner publishes `link.expiring` |
 | `clicks` | queue | bound to `link.clicked`; dead-letters to `shortlink.dlx` |
 | `shortlink.dlx` | direct exchange | — |
 | `clicks.dlq` | queue | failed click batches end up here |

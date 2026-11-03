@@ -53,8 +53,8 @@ exists: the row is dropped and `next_cursor` is the last kept row's ID.
 Otherwise `next_cursor` is `""`, even when the page is exactly full, so a
 client never fetches an empty page at the end. `trimPage` in `admin.go` does
 this for links and the admin lists; notifications get `HasMore` from the
-service. `GET /api/notifications` answers 400 for a `cursor` that is not a
-positive integer.
+service. `GET /api/links` and `GET /api/notifications` answer 400 for a
+`cursor` that is not a positive integer (the admin lists already did).
 
 Routing uses Go's standard `http.ServeMux` patterns (`"GET /{code}"`). When two
 patterns match, the more specific one wins, so `GET /docs` beats `GET /{code}`.

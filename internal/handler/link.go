@@ -203,7 +203,7 @@ func (h *LinkHandler) List(w http.ResponseWriter, r *http.Request) {
 	var afterID int64
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
+		if err != nil || id <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid cursor")
 			return
 		}

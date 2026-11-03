@@ -492,3 +492,19 @@ func TestLinkHandler_Redirect_Disabled(t *testing.T) {
 		t.Errorf("want 410 link disabled, got %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestLinkHandler_List_BadCursor(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		listByUserFn: func(context.Context, int64, int64, int) ([]*service.Link, error) {
+			t.Error("service must not be called for a bad cursor")
+			return nil, nil
+		},
+	})
+	for _, c := range []string{"abc", "0", "-5"} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, withUserID(httptest.NewRequest("GET", "/api/links?cursor="+c, nil), 1))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("cursor=%s: got %d, want 400", c, w.Code)
+		}
+	}
+}

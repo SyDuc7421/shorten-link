@@ -119,7 +119,7 @@ WAF, captcha, payments.
 | NFR-S7 | Slow-client protection (header/read/write/idle timeouts) | ✅ |
 | NFR-S8 | Secrets come from env/volumes, never committed | ✅ `.env`, `keys/` git-ignored |
 | NFR-S9 | JWT signing key can be rotated without logging everyone out (`kid`) | ❌ |
-| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.9, 0 reachable findings; enforced in CI |
+| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.10, 0 reachable findings; enforced in CI |
 | NFR-S11 | Redis and RabbitMQ require authentication in production | ✅ prod compose refuses to start without `REDIS_PASSWORD` / `RABBITMQ_*` |
 | NFR-S12 | Audit trail for security-relevant actions | ⚠️ every admin action is in `audit_log` (same transaction); logins, password resets and user actions are not |
 

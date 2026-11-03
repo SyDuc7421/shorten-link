@@ -42,7 +42,7 @@ There are **two programs**, built from the same codebase:
 
 | Program | What it does | Talks to |
 |---|---|---|
-| **server** (`cmd/server`) | Serves the REST API, the redirects and `/docs` | MySQL, Redis, RabbitMQ (publish only) |
+| **server** (`cmd/server`) | Serves the REST API, the redirects and `/docs`; publishes click and notification events, e.g. `user.password_changed` after a password reset | MySQL, Redis, RabbitMQ (publish only), SMTP |
 | **worker** (`cmd/worker`) | Reads click events and adds them to each link's counter | RabbitMQ (consume), MySQL |
 
 And **three backing services**:
@@ -277,7 +277,7 @@ to 3 attempts.
 
 | Name | Type | Notes |
 |---|---|---|
-| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked` and, from the admin service, `link.disabled`, `link.enabled`; the worker's expiry scanner publishes `link.expiring` |
+| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked` and, from the admin service, `link.disabled`, `link.enabled`, and from the auth service `user.password_changed`; the worker's expiry scanner publishes `link.expiring` |
 | `clicks` | queue | bound to `link.clicked`; dead-letters to `shortlink.dlx` |
 | `shortlink.dlx` | direct exchange | — |
 | `clicks.dlq` | queue | failed click batches end up here |
@@ -296,6 +296,15 @@ to 3 attempts.
 | **MySQL** | work for cached links only | fail | fail | no, retried then DLQ |
 | **RabbitMQ** | work | work | work | **lost** for that period |
 | **worker** | work | work | work | delayed (queue grows) |
+
+Notification events (`link.disabled`, `link.enabled`, `user.password_changed`)
+follow one rule: **RabbitMQ down = notification lost, never a failed request.**
+They are published in the background with a 2s timeout and a failure is only
+logged. A password reset likewise still succeeds, and the notice mail is still
+sent, when the publish fails.
+
+Known gap: notifications are never deleted. The `notifications` table only
+grows.
 
 `/healthz` returns 503 if any of MySQL, Redis or RabbitMQ is unreachable.
 

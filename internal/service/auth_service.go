@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,8 @@ type AuthService struct {
 	publicKey  *rsa.PublicKey
 	mailer     Mailer
 	resetURL   *url.URL // GUI page; ?token= is appended. From ParseResetURL
+	forgotURL  string   // resetURL with the last path segment replaced by forgot-password; no query
+	pub        Publisher
 }
 
 // NewAuthService constructs an AuthService.
@@ -68,7 +71,12 @@ func NewAuthService(
 	publicKey *rsa.PublicKey,
 	mailer Mailer,
 	resetURL *url.URL,
+	pub Publisher,
 ) *AuthService {
+	forgot := *resetURL
+	forgot.RawQuery, forgot.Fragment = "", ""
+	forgot.Path = path.Join(path.Dir(forgot.Path), "forgot-password")
+	forgot.RawPath = ""
 	return &AuthService{
 		users:      users,
 		tokens:     tokens,
@@ -77,6 +85,8 @@ func NewAuthService(
 		publicKey:  publicKey,
 		mailer:     mailer,
 		resetURL:   resetURL,
+		forgotURL:  forgot.String(),
+		pub:        pub,
 	}
 }
 
@@ -302,6 +312,18 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	if revokeErr != nil {
 		return fmt.Errorf("service: revoke sessions after password change: %w", revokeErr)
 	}
+
+	// Tell the user. Both run in the background: a broker or mail outage
+	// must not fail a reset that has already succeeded.
+	now := time.Now().UTC()
+	publishAsync(ctx, s.pub, RoutePasswordChanged, NotificationEvent{
+		DedupeKey:  "password:" + uuid.NewString(),
+		UserID:     userID,
+		OccurredAt: now,
+	})
+	s.runAsync(func(ctx context.Context) {
+		s.mailer.SendPasswordChanged(ctx, user.Email, now, s.forgotURL) //nolint:errcheck // the mailer logs failures
+	})
 
 	s.tokens.DeleteLockout(ctx, user.Email)   //nolint:errcheck
 	s.tokens.DeletePasswordReset(ctx, userID) //nolint:errcheck

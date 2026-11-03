@@ -14,7 +14,7 @@ interfaces it declares itself, in `link.go`, `auth.go` and `admin.go`:
 | `Publisher` | `messaging.Publisher` (or `NoopPublisher`) | Send events such as clicks |
 | `UserRepository` | `repository.userMySQL` | Store and read users |
 | `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
-| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
+| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email and the password-changed notice |
 | `AdminRepository` | `repository.adminMySQL` | Admin lists and audited writes |
 | `NotificationRepository` | `repository.notificationMySQL` | Store and read in-app notifications, find links about to expire |
 
@@ -224,7 +224,17 @@ In the background:
    (retried up to 3 times). The first revoke means that if anything later
    fails, the existing sessions are already gone. The second catches a login
    with the old password or a refresh that was in flight during the change.
-5. Clear the lockout counter and the reset pointer.
+5. Tell the user, in the background, so neither can fail a reset that has
+   already succeeded. `now` is taken once (UTC) after the second revoke.
+   `publishAsync` publishes `user.password_changed` with a `NotificationEvent`
+   (`DedupeKey` `password:<uuid>`, the user id, `OccurredAt` = `now`, no link);
+   the worker turns it into an in-app `password_changed` notification. And
+   `runAsync` calls `Mailer.SendPasswordChanged(user.Email, now, forgotURL)`.
+   `forgotURL` is computed once in `NewAuthService`: `resetURL` with its last
+   path segment replaced by `forgot-password` and no query. The mail has no
+   token. If RabbitMQ is down the notification is lost and the reset still
+   succeeds; a failed mail is only logged.
+6. Clear the lockout counter and the reset pointer.
 
 If the first revoke fails, the password is left unchanged and the call fails.
 In every failure case the token is already consumed and the user requests a new
@@ -347,7 +357,10 @@ Known gap: if more than 500 links qualify, the rest wait for later scans.
   but only a password reset triggers it; there is no endpoint for it yet.
 - The password reset tests use `mockMailer`, which records mails on a channel
   because they are sent from a goroutine. `next` waits for one; `none` checks
-  that nothing arrives within 100 ms.
+  that nothing arrives within 100 ms. Both only see reset-link mails;
+  password-changed notices go to a separate channel (`changed`). The
+  publisher is a `chanPub` (see `admin_service_test.go`) via
+  `newAuthSvcWithPub`.
 - Lockout has two known gaps. The check and the increment are separate steps,
   so parallel login attempts that all pass the check before any increment can
   try more than 5 passwords. And `INCR` and `EXPIRE` are separate Redis calls,

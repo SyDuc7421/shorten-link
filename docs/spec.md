@@ -35,6 +35,7 @@ WAF, captcha, payments.
 | FR-A8 | Logout revokes the current refresh token | ❌ no endpoint |
 | FR-A9 | User can reset a forgotten password | ✅ emailed single-use link, 30 min; ends all sessions |
 | FR-A10 | Email ownership is verified before links can be created | ❌ |
+| FR-A12 | After a password reset the user gets an email (time in UTC, link to the forgot-password page, no token) and an in-app notification | ✅ both sent in the background; if RabbitMQ or SMTP is down the message is lost and the reset still succeeds |
 | FR-A11 | Revoke all sessions of a user (password change, compromise) | ⚠️ done on password reset (`urt:<userID>` index); no endpoint of its own; tokens issued before the index existed are not covered |
 
 ### 2.2 Links
@@ -79,7 +80,7 @@ WAF, captcha, payments.
 
 | ID | Requirement | Status |
 |---|---|---|
-| FR-N1 | A signed-in user lists their notifications, newest first, 20 per page (`GET /api/notifications?cursor=`), with the unread count | ✅ API only; events that create notifications are added in later tasks |
+| FR-N1 | A signed-in user lists their notifications, newest first, 20 per page (`GET /api/notifications?cursor=`), with the unread count | ✅ API only; created by link disable/enable, the expiry scanner and password resets |
 | FR-N2 | A user marks one notification (`POST /api/notifications/{id}/read`) or all (`/read-all`) read; another user's id answers `404` | ✅ |
 
 ### 2.5 Operations endpoints

@@ -56,6 +56,19 @@ func (m *SMTPMailer) SendPasswordReset(ctx context.Context, to, link string) err
 	return err
 }
 
+// SendPasswordChanged tells to that the password changed at changedAt.
+// Failures are logged here, like SendPasswordReset.
+func (m *SMTPMailer) SendPasswordChanged(ctx context.Context, to string, changedAt time.Time, forgotURL string) error {
+	msg, err := passwordChangedMessage(m.cfg.From, to, changedAt, forgotURL)
+	if err == nil {
+		err = m.send(ctx, to, msg)
+	}
+	if err != nil {
+		m.log.Warn("send password changed mail", zap.String("to", to), zap.Error(err))
+	}
+	return err
+}
+
 func (m *SMTPMailer) send(ctx context.Context, to string, msg []byte) error {
 	addr := net.JoinHostPort(m.cfg.Host, strconv.Itoa(m.cfg.Port))
 	if m.dialAddr != "" {
@@ -150,15 +163,30 @@ func (m *LogMailer) SendPasswordReset(_ context.Context, to, link string) error 
 	return nil
 }
 
+// SendPasswordChanged logs to.
+func (m *LogMailer) SendPasswordChanged(_ context.Context, to string, _ time.Time, _ string) error {
+	m.log.Info("password changed notice (SMTP_HOST not set, mail not sent)", zap.String("to", to))
+	return nil
+}
+
+// checkAddresses rejects anything but a bare address; this includes CR/LF,
+// which would inject headers.
+func checkAddresses(addrs ...string) error {
+	for _, a := range addrs {
+		parsed, err := mail.ParseAddress(a)
+		if err != nil || parsed.Address != a {
+			return fmt.Errorf("mail: invalid address %q", a)
+		}
+	}
+	return nil
+}
+
 // passwordResetMessage builds the RFC 5322 message. from and to must be bare
 // addresses; anything else (including CR/LF, which would inject headers) is
 // rejected.
 func passwordResetMessage(from, to, link string) ([]byte, error) {
-	for _, a := range []string{from, to} {
-		parsed, err := mail.ParseAddress(a)
-		if err != nil || parsed.Address != a {
-			return nil, fmt.Errorf("mail: invalid address %q", a)
-		}
+	if err := checkAddresses(from, to); err != nil {
+		return nil, err
 	}
 
 	var b strings.Builder
@@ -175,5 +203,28 @@ func passwordResetMessage(from, to, link string) ([]byte, error) {
 	b.WriteString(link + "\r\n\r\n")
 	b.WriteString("This link expires in 30 minutes and works once.\r\n")
 	b.WriteString("If you did not ask for it, ignore this email. Your password has not changed.\r\n")
+	return []byte(b.String()), nil
+}
+
+// passwordChangedMessage builds the notice sent after a password change. It
+// holds no token: forgotURL is the plain forgot-password page. Addresses are
+// checked as in passwordResetMessage.
+func passwordChangedMessage(from, to string, changedAt time.Time, forgotURL string) ([]byte, error) {
+	if err := checkAddresses(from, to); err != nil {
+		return nil, err
+	}
+
+	var b strings.Builder
+	header := func(k, v string) { b.WriteString(k + ": " + v + "\r\n") }
+	header("From", from)
+	header("To", to)
+	header("Subject", "Your password was changed")
+	header("Date", time.Now().UTC().Format(time.RFC1123Z))
+	header("MIME-Version", "1.0")
+	header("Content-Type", "text/plain; charset=UTF-8")
+	b.WriteString("\r\n")
+	b.WriteString("The password for this account was changed on " + changedAt.UTC().Format(time.RFC1123) + ".\r\n\r\n")
+	b.WriteString("If this was not you, reset your password now:\r\n")
+	b.WriteString(forgotURL + "\r\n")
 	return []byte(b.String()), nil
 }

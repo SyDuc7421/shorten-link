@@ -83,12 +83,13 @@ func TestNotificationConsumer_InsertsAndAcks(t *testing.T) {
 
 func TestNotificationConsumer_RejectsBadMessages(t *testing.T) {
 	cases := map[string]struct{ route, body string }{
-		"bad json":        {service.RouteLinkDisabled, `{not json`},
-		"unknown route":   {"link.unknown", `{"dedupe_key":"x","user_id":1,"link_id":1,"short_code":"a"}`},
-		"missing user_id": {service.RouteLinkDisabled, `{"dedupe_key":"x","link_id":1,"short_code":"a"}`},
-		"missing link_id": {service.RouteLinkDisabled, `{"dedupe_key":"x","user_id":1,"short_code":"a"}`},
-		"missing dedupe":  {service.RouteLinkDisabled, `{"user_id":1,"link_id":1,"short_code":"a"}`},
-		"missing code":    {service.RouteLinkEnabled, `{"dedupe_key":"x","user_id":1,"link_id":1}`},
+		"bad json":                    {service.RouteLinkDisabled, `{not json`},
+		"unknown route":               {"link.unknown", `{"dedupe_key":"x","user_id":1,"link_id":1,"short_code":"a"}`},
+		"missing user_id":             {service.RouteLinkDisabled, `{"dedupe_key":"x","link_id":1,"short_code":"a"}`},
+		"missing link_id":             {service.RouteLinkDisabled, `{"dedupe_key":"x","user_id":1,"short_code":"a"}`},
+		"missing dedupe":              {service.RouteLinkDisabled, `{"user_id":1,"link_id":1,"short_code":"a"}`},
+		"missing code":                {service.RouteLinkEnabled, `{"dedupe_key":"x","user_id":1,"link_id":1}`},
+		"expiring without expires_at": {service.RouteLinkExpiring, `{"dedupe_key":"expiring:1","user_id":1,"link_id":1,"short_code":"a"}`},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -156,5 +157,25 @@ func TestNotificationConsumer_InFlightDeliveryFinishesAfterCancel(t *testing.T) 
 		amqp.Delivery{Acknowledger: ack, Redelivered: true, Body: []byte(`{"dedupe_key":"password:u3","user_id":7}`), RoutingKey: service.RoutePasswordChanged})
 	if ack.acked != 1 || len(ack.requeue) != 0 || len(repo.got) != 1 {
 		t.Fatalf("want ack and 1 insert, got acked=%d nacks=%v inserts=%d", ack.acked, ack.requeue, len(repo.got))
+	}
+}
+
+// The expiry scanner republishes link.expiring until a row exists, so a
+// failed insert is dropped instead of dead-lettered: the DLQ would otherwise
+// gain a copy every scan.
+func TestNotificationConsumer_ExpiringInsertFailureIsDroppedNotDLQ(t *testing.T) {
+	repo := &fakeNotifRepo{err: errors.New("db down")}
+	c := newTestNotifConsumer(repo)
+	body := []byte(`{"dedupe_key":"expiring:1","user_id":1,"link_id":1,"short_code":"a","expires_at":"2030-01-02T03:04:05Z"}`)
+
+	first, second := &fakeAck{}, &fakeAck{}
+	c.handle(context.Background(), amqp.Delivery{Acknowledger: first, Body: body, RoutingKey: service.RouteLinkExpiring})
+	c.handle(context.Background(), amqp.Delivery{Acknowledger: second, Body: body, RoutingKey: service.RouteLinkExpiring, Redelivered: true})
+
+	if len(first.requeue) != 1 || !first.requeue[0] || first.acked != 0 {
+		t.Errorf("first: want one Nack requeue=true, got %v acked=%d", first.requeue, first.acked)
+	}
+	if second.acked != 1 || len(second.requeue) != 0 {
+		t.Errorf("redelivered: want ack (dropped, scanner retries), got acked=%d nacks=%v", second.acked, second.requeue)
 	}
 }

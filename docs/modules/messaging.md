@@ -123,8 +123,9 @@ only limits how many are in flight). `handle` settles each delivery:
    Unknown key, bad JSON, `user_id == 0` or an empty `dedupe_key`: reject
    without requeue, so the message goes to `notifications.dlq`.
 2. For `link.disabled`, `link.enabled` and `link.expiring`, `link_id == 0` or
-   an empty `short_code` is rejected the same way. `user.password_changed`
-   carries no link, so its `LinkID` and `ShortCode` stay nil.
+   an empty `short_code` is rejected the same way, and so is `link.expiring`
+   without `expires_at`. `user.password_changed` carries no link, so its
+   `LinkID` and `ShortCode` stay nil.
 3. `Insert` succeeds: ack. A duplicate `dedupe_key` is not an error (the
    insert is `INSERT ... ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key`, a
    no-op), so a redelivered or republished event is acked and stores nothing
@@ -132,7 +133,10 @@ only limits how many are in flight). `handle` settles each delivery:
    not change the time shown. `Insert` runs on a context that ignores
    shutdown, so a delivery already taken finishes instead of failing.
 4. `Insert` fails: same retry-once rule as clicks. First failure is requeued,
-   a redelivered message is dead-lettered.
+   a redelivered message is dead-lettered. The exception is `link.expiring`:
+   a redelivered one is logged and acked (dropped), because the expiry
+   scanner publishes it again on its next scan while no row exists. Sending
+   it to the DLQ would add a copy every scan until the link expires.
 
 ## Before you change it
 

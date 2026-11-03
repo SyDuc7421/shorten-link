@@ -49,7 +49,8 @@ func (c *NotificationConsumer) Start(ctx context.Context) error {
 }
 
 // handle settles one delivery. Malformed messages are dead-lettered at once;
-// insert failures are retried once, then dead-lettered.
+// insert failures are retried once, then dead-lettered (link.expiring is
+// dropped instead, since the scanner republishes it).
 func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 	typ, ok := service.NotificationTypeForRoute(d.RoutingKey)
 	if !ok {
@@ -78,11 +79,22 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 		n.LinkID = &evt.LinkID
 		n.ShortCode = &evt.ShortCode
 	}
+	if typ == service.NotificationLinkExpiring && evt.ExpiresAt == nil {
+		c.reject(d, "missing expires_at")
+		return
+	}
 
 	// Insert ignores shutdown: a delivery already taken finishes, so a
 	// cancelled ctx cannot fail it and push a redelivery to the DLQ.
 	if err := c.repo.Insert(context.WithoutCancel(ctx), n, evt.DedupeKey); err != nil {
 		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey))
+		// The expiry scanner publishes link.expiring again on its next scan
+		// while no row exists, so a second failure drops the event instead of
+		// adding a copy to the DLQ every scan.
+		if d.Redelivered && typ == service.NotificationLinkExpiring {
+			d.Ack(false) //nolint:errcheck
+			return
+		}
 		d.Nack(false, !d.Redelivered) //nolint:errcheck
 		return
 	}

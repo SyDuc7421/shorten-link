@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
@@ -18,9 +19,12 @@ type fakeNotifRepo struct {
 	dedup []string
 }
 
-func (f *fakeNotifRepo) Insert(_ context.Context, n *service.Notification, dedupeKey string) error {
+func (f *fakeNotifRepo) Insert(ctx context.Context, n *service.Notification, dedupeKey string) error {
 	if f.err != nil {
 		return f.err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	f.got = append(f.got, n)
 	f.dedup = append(f.dedup, dedupeKey)
@@ -128,5 +132,29 @@ func TestNotificationConsumer_DuplicateIsAcked(t *testing.T) {
 	})
 	if ack.acked != 1 || len(ack.requeue) != 0 {
 		t.Fatalf("want exactly one ack, got acked=%d nacks=%v", ack.acked, ack.requeue)
+	}
+}
+
+func TestNotificationConsumer_OccurredAtBecomesCreatedAt(t *testing.T) {
+	repo := &fakeNotifRepo{}
+	ack := &fakeAck{}
+	body := `{"dedupe_key":"password:u3","user_id":7,"occurred_at":"2030-01-02T03:04:05Z"}`
+	newTestNotifConsumer(repo).handle(context.Background(),
+		amqp.Delivery{Acknowledger: ack, Body: []byte(body), RoutingKey: service.RoutePasswordChanged})
+	want := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	if len(repo.got) != 1 || !repo.got[0].CreatedAt.Equal(want) {
+		t.Fatalf("got %+v, want CreatedAt %v", repo.got, want)
+	}
+}
+
+func TestNotificationConsumer_InFlightDeliveryFinishesAfterCancel(t *testing.T) {
+	repo := &fakeNotifRepo{}
+	ack := &fakeAck{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	newTestNotifConsumer(repo).handle(ctx,
+		amqp.Delivery{Acknowledger: ack, Redelivered: true, Body: []byte(`{"dedupe_key":"password:u3","user_id":7}`), RoutingKey: service.RoutePasswordChanged})
+	if ack.acked != 1 || len(ack.requeue) != 0 || len(repo.got) != 1 {
+		t.Fatalf("want ack and 1 insert, got acked=%d nacks=%v inserts=%d", ack.acked, ack.requeue, len(repo.got))
 	}
 }

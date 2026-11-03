@@ -65,8 +65,9 @@ type ExpiringLink struct {
 }
 
 type NotificationRepository interface {
-	// Insert stores n (ID and CreatedAt are ignored, set by MySQL). A row with
-	// the same dedupeKey already present is not an error and changes nothing.
+	// Insert stores n (ID is ignored, set by MySQL). CreatedAt is stored as
+	// given, or the current UTC time when zero. A row with the same
+	// dedupeKey already present is not an error and changes nothing.
 	Insert(ctx context.Context, n *Notification, dedupeKey string) error
 	// ListByUser returns up to limit rows of userID, newest first, with id < beforeID (0 = from the newest).
 	ListByUser(ctx context.Context, userID, beforeID int64, limit int) ([]*Notification, error)

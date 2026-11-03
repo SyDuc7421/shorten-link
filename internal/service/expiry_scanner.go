@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -54,8 +55,12 @@ func (s *ExpiryScanner) ScanOnce(ctx context.Context, now time.Time) (published 
 }
 
 // Run calls ScanOnce right away and then on every tick, until ctx is done; then it returns nil.
+// An interval of zero or less is an error, returned at once.
 // A ScanOnce error is logged, not returned, so a DB blip does not stop the worker.
 func (s *ExpiryScanner) Run(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		return fmt.Errorf("expiry scanner: interval must be > 0, got %s", interval)
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

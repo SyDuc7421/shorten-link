@@ -125,3 +125,12 @@ func TestExpiryScanner_RunStopsOnCancel(t *testing.T) {
 		t.Error("Run never scanned")
 	}
 }
+
+func TestExpiryScanner_RunRejectsNonPositiveInterval(t *testing.T) {
+	s := service.NewExpiryScanner(&scanRepo{}, &recordingPub{}, zap.NewNop())
+	for _, d := range []time.Duration{0, -time.Second} {
+		if err := s.Run(context.Background(), d); err == nil {
+			t.Errorf("Run(%v) = nil, want error", d)
+		}
+	}
+}

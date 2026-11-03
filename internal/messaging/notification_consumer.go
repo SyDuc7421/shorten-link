@@ -67,6 +67,9 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 	}
 
 	n := &service.Notification{UserID: evt.UserID, Type: typ, ExpiresAt: evt.ExpiresAt}
+	if !evt.OccurredAt.IsZero() {
+		n.CreatedAt = evt.OccurredAt
+	}
 	if typ != service.NotificationPasswordChanged {
 		if evt.LinkID == 0 || evt.ShortCode == "" {
 			c.reject(d, "missing link_id or short_code")
@@ -76,7 +79,9 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 		n.ShortCode = &evt.ShortCode
 	}
 
-	if err := c.repo.Insert(ctx, n, evt.DedupeKey); err != nil {
+	// Insert ignores shutdown: a delivery already taken finishes, so a
+	// cancelled ctx cannot fail it and push a redelivery to the DLQ.
+	if err := c.repo.Insert(context.WithoutCancel(ctx), n, evt.DedupeKey); err != nil {
 		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey))
 		d.Nack(false, !d.Redelivered) //nolint:errcheck
 		return

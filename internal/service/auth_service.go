@@ -75,7 +75,7 @@ func NewAuthService(
 ) *AuthService {
 	forgot := *resetURL
 	forgot.RawQuery, forgot.Fragment = "", ""
-	forgot.Path = path.Join(path.Dir(forgot.Path), "forgot-password")
+	forgot.Path = path.Join(path.Dir(strings.TrimSuffix(forgot.Path, "/")), "forgot-password")
 	forgot.RawPath = ""
 	return &AuthService{
 		users:      users,

@@ -192,3 +192,21 @@ func TestNotificationMySQL_InsertSurfacesOtherErrors(t *testing.T) {
 		t.Fatal("want error for short_code longer than 16 chars, got nil")
 	}
 }
+
+func TestNotificationMySQL_InsertStoresGivenCreatedAt(t *testing.T) {
+	db := setupMySQL(t)
+	repo := repository.NewNotificationMySQL(db)
+	ctx := context.Background()
+	at := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	n := &service.Notification{UserID: 1, Type: service.NotificationPasswordChanged, CreatedAt: at}
+	if err := repo.Insert(ctx, n, "password:t"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.ListByUser(ctx, 1, 0, 20)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %v, err %v", got, err)
+	}
+	if !got[0].CreatedAt.Equal(at) {
+		t.Errorf("created_at = %v, want %v", got[0].CreatedAt, at)
+	}
+}

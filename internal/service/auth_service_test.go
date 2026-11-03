@@ -303,6 +303,11 @@ func newAuthSvcWithMailer(t *testing.T, users *mockUserRepo, tokens *mockTokenCa
 
 func newAuthSvcWithPub(t *testing.T, users *mockUserRepo, tokens *mockTokenCache, pub service.Publisher) (*service.AuthService, *mockMailer) {
 	t.Helper()
+	return newAuthSvcWithURL(t, users, tokens, pub, testResetURL)
+}
+
+func newAuthSvcWithURL(t *testing.T, users *mockUserRepo, tokens *mockTokenCache, pub service.Publisher, resetURL string) (*service.AuthService, *mockMailer) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -312,7 +317,7 @@ func newAuthSvcWithPub(t *testing.T, users *mockUserRepo, tokens *mockTokenCache
 		t.Fatal(err)
 	}
 	mailer := newMockMailer()
-	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, mustParseResetURL(t, testResetURL), pub), mailer
+	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, mustParseResetURL(t, resetURL), pub), mailer
 }
 
 // tokenFromLink extracts ?token= from a mailed reset link.
@@ -881,5 +886,31 @@ func TestResetPassword_PublishFailureStillMails(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no password-changed mail sent")
+	}
+}
+
+func TestResetPassword_ForgotURLFromResetURL(t *testing.T) {
+	cases := []struct{ resetURL, want string }{
+		{"https://app.example.com/reset-password", "https://app.example.com/forgot-password"},
+		{"https://app.example.com/reset-password/", "https://app.example.com/forgot-password"},
+		{"https://app.example.com/en/reset-password", "https://app.example.com/en/forgot-password"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.resetURL, func(t *testing.T) {
+			users, tokens := newMockUserRepo(), newMockTokenCache()
+			svc, mailer := newAuthSvcWithURL(t, users, tokens, service.NoopPublisher{}, tc.resetURL)
+			token := requestResetToken(t, svc, mailer, "a@x.com")
+			if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+				t.Fatalf("reset: %v", err)
+			}
+			select {
+			case m := <-mailer.changed:
+				if m.forgotURL != tc.want {
+					t.Errorf("forgotURL = %q, want %q", m.forgotURL, tc.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no password-changed mail")
+			}
+		})
 	}
 }

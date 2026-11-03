@@ -14,6 +14,7 @@ cannot reach past it.
 | `link_mysql.go` | `service.LinkRepository` | `links` table |
 | `user_mysql.go` | `service.UserRepository` | `users` table |
 | `admin_mysql.go` | `service.AdminRepository` | `users`, `links`, `audit_log` |
+| `notification_mysql.go` | `service.NotificationRepository` | `notifications` table, plus `links` and `users` for the expiry query |
 | `link_redis.go` | `service.LinkCache` | Redis keys `sl:<code>` |
 | `token_redis.go` | `service.TokenCache` | Redis keys `rt:<jti>`, `lockout:<email>` |
 
@@ -111,6 +112,20 @@ a primary-key range instead of the whole table (`created_at` has no index).
 `audit_log.metadata` holds `reason` when the admin gave one, `before`/`after`
 for a quota change and `code` for link actions; it is `NULL` when there is
 nothing to say. `user_id` is the acting admin, `0` for the CLI.
+
+## Notifications in MySQL (`notification_mysql.go`)
+
+`Insert` uses `INSERT IGNORE` on the unique `dedupe_key`, so a redelivered
+event or a second scanner pass stores nothing and is not an error. `ListByUser`
+pages newest first by id (`id < beforeID`). `MarkRead` sets
+`read_at = COALESCE(read_at, UTC_TIMESTAMP())`; because MySQL counts only
+changed rows, a second call affects 0 rows, so it checks that the row exists
+for that user and returns `ErrNotFound` if not (another user's id looks the
+same as a missing one). `ExpiringLinks` takes `now` from the caller (no
+`NOW()`, so tests fix the time) and returns links expiring within the window
+whose lifetime was longer than the window, not disabled (link or owner), and
+with no `expiring:<id>` notification yet. It reads through `links(expires_at)`
+(migration 009).
 
 ## Redis (`link_redis.go`, `token_redis.go`)
 

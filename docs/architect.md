@@ -253,6 +253,7 @@ to 3 attempts.
 | `links` | ✔ | id, user_id, short_code (unique), original_url, clicks, expires_at, disabled_at |
 | `analytics_daily` | ✔ | Clicks per link per UTC day, primary key (link_id, stat_date); written by the worker, read by `/api/admin/stats` |
 | `audit_log` | ✔ | One row per admin action (who, what, target, JSON metadata) |
+| `notifications` | ✔ | In-app notifications: user_id, type, link_id, short_code, expires_at, unique dedupe_key, read_at. Repository only so far |
 
 ### Redis keys
 

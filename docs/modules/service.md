@@ -339,7 +339,7 @@ then publishes one `link.expiring` event per link with the dedupe key
 no notification row exists yet, so the next scan finds the link again. It
 returns an error only when the repository query fails.
 
-`Run(ctx, interval)` scans once at once, then on every tick, until `ctx` is
+`Run(ctx, interval)` scans once right away, then on every tick, until `ctx` is
 cancelled, and returns nil. A scan error is logged and the loop keeps going.
 Known gap: if more than 500 links qualify, the rest wait for later scans.
 

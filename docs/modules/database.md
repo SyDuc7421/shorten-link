@@ -38,7 +38,7 @@ so running it twice does nothing the second time.
 | `short_code` | Unique, `VARCHAR(16)`, **case-sensitive** (`utf8mb4_bin`) |
 | `original_url` | `TEXT` |
 | `clicks` | Running total, updated in batches by the worker |
-| `expires_at` | `DATETIME`, nullable, stored in UTC |
+| `expires_at` | `DATETIME`, nullable, stored in UTC. Indexed (`idx_expires_at`, migration 009) for the expiry scanner |
 | `disabled_at` | `DATETIME`, nullable. Set while an admin has disabled this link |
 | `created_at`, `updated_at` | Set by MySQL |
 
@@ -65,7 +65,8 @@ code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 
 ### `notifications`
 
-One row per in-app notification for a link owner (migration 009). It stores
+One row per in-app notification (migration 009): link events for the link's
+owner, and `password_changed` rows for any user. It stores
 structured fields, not display text, so the front end owns the wording.
 
 | Column | Notes |
@@ -77,7 +78,7 @@ structured fields, not display text, so the front end owns the wording.
 | `expires_at` | `DATETIME`, only for `link_expiring` |
 | `dedupe_key` | Unique (`uk_dedupe`): `disabled:<uuid>`, `enabled:<uuid>`, `password:<uuid>` or `expiring:<link_id>`. A repeated event inserts nothing |
 | `read_at` | `DATETIME`, `NULL` while unread |
-| `created_at` | `DATETIME`, set by MySQL |
+| `created_at` | `DATETIME`, the event's `occurred_at` in UTC (insert time if the event has none) |
 
 Indexed by `(user_id, id)` for the list and `(user_id, read_at)` for the
 unread count. No foreign keys, like the other tables.
@@ -98,7 +99,7 @@ unread count. No foreign keys, like the other tables.
 
 ## Writing a migration
 
-1. Use the next number: `009_what_it_does.up.sql` and `.down.sql`.
+1. Use the next number: `010_what_it_does.up.sql` and `.down.sql`.
 2. Start the file with a comment that says **why**, not only what. The history
    table above is built from those comments.
 3. Write the `down` file even if you hope never to run it. If it can fail on

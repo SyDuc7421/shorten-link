@@ -1,6 +1,6 @@
 # In-app notifications for link owners: design
 
-Status: draft, waiting for approval. Nothing is built yet.
+Status: approved; backend implemented on feat/notifications; front end pending.
 Covers two repos that sit side by side: `shorten-link` (Go API + worker) and
 `shorten-link-gui` (Next.js front end). This file lives in both repos.
 

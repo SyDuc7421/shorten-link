@@ -43,7 +43,7 @@ There are **two programs**, built from the same codebase:
 | Program | What it does | Talks to |
 |---|---|---|
 | **server** (`cmd/server`) | Serves the REST API, the redirects and `/docs`; publishes click and notification events, e.g. `user.password_changed` after a password reset | MySQL, Redis, RabbitMQ (publish only), SMTP |
-| **worker** (`cmd/worker`) | Reads click events and adds them to each link's counter | RabbitMQ (consume), MySQL |
+| **worker** (`cmd/worker`) | Reads click events and adds them to each link's counter; stores notification events in MySQL; scans for expiring links and publishes `link.expiring` | RabbitMQ (consume and publish), MySQL |
 
 And **three backing services**:
 
@@ -256,7 +256,7 @@ to 3 attempts.
 | `links` | ✔ | id, user_id, short_code (unique), original_url, clicks, expires_at, disabled_at |
 | `analytics_daily` | ✔ | Clicks per link per UTC day, primary key (link_id, stat_date); written by the worker, read by `/api/admin/stats` |
 | `audit_log` | ✔ | One row per admin action (who, what, target, JSON metadata) |
-| `notifications` | ✔ | In-app notifications: user_id, type, link_id, short_code, expires_at, unique dedupe_key, read_at. Repository only so far |
+| `notifications` | ✔ | In-app notifications: user_id, type, link_id, short_code, expires_at, unique dedupe_key, read_at. Written by the worker, read by the API; also holds `password_changed` rows |
 
 ### Redis keys
 
@@ -302,6 +302,10 @@ follow one rule: **RabbitMQ down = notification lost, never a failed request.**
 They are published in the background with a 2s timeout and a failure is only
 logged. A password reset likewise still succeeds, and the notice mail is still
 sent, when the publish fails.
+
+MySQL down while the worker consumes: notification events are retried once,
+then dead-lettered to `notifications.dlq`, where they are only logged. They
+are lost (`link.expiring` is recreated by the next scan).
 
 Known gap: notifications are never deleted. The `notifications` table only
 grows.

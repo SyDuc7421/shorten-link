@@ -1,15 +1,15 @@
-# `cmd/worker`: the click counter
+# `cmd/worker`: clicks, notifications and expiry scan
 
 **What it does.** The second program built from this codebase. It reads click
 events from RabbitMQ and adds them to each link's `clicks` column in MySQL. It
 also reads notification events and stores them in the `notifications` table.
-It also **publishes** now: a timer
-scans for links about to expire and publishes `link.expiring` events. It has
-no HTTP server.
+It also **publishes**: a timer scans for links about to expire and publishes
+`link.expiring` events. It has no HTTP server.
 
 **Where it sits.** It uses `config`, `internal/messaging`,
-`internal/repository` and `internal/service` (for the expiry scanner). Nothing imports it. The server and the worker share no
-memory; they only meet through RabbitMQ and MySQL.
+`internal/repository` and `internal/service` (for the expiry scanner).
+Nothing imports it. The server and the worker share no memory; they only meet
+through RabbitMQ and MySQL.
 
 ## What happens when it runs
 
@@ -45,8 +45,8 @@ memory; they only meet through RabbitMQ and MySQL.
   **1**. Exiting non-zero tells Docker (`restart: unless-stopped`) that
   something went wrong, and the restart reconnects from scratch.
 
-The worker does not reconnect by itself the way the server's publisher does.
-Restarting the process is simpler and loses nothing: unacknowledged messages
+The consumers do not reconnect by themselves; the worker's publisher does, the
+same way the server's publisher does. Restarting the process is simpler and loses nothing: unacknowledged messages
 stay in the queue and are delivered again.
 
 ## Running it

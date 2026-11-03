@@ -6,8 +6,11 @@ parts: the topology (`setup.go`), the publisher used by the server
 (`publisher.go`), and the consumers used by the worker (`consumer.go`, `notification_consumer.go`).
 
 **Where it sits.** `cmd/server` creates a `Publisher` and hands it to
-`service.LinkService`, which sees it only as a `service.Publisher`. `cmd/worker`
-creates the consumers and gives them `repository.linkMySQL` to write counts.
+`service.LinkService`, `service.AdminService` and `service.AuthService`, which
+see it only as a `service.Publisher`. `cmd/worker` creates the consumers and
+gives them `repository.linkMySQL` to write counts and
+`repository.NewNotificationMySQL` to store notifications. It also creates one
+`Publisher` for the expiry scanner.
 
 ## The topology (`setup.go`)
 
@@ -122,14 +125,19 @@ only limits how many are in flight). `handle` settles each delivery:
 2. For `link.disabled`, `link.enabled` and `link.expiring`, `link_id == 0` or
    an empty `short_code` is rejected the same way. `user.password_changed`
    carries no link, so its `LinkID` and `ShortCode` stay nil.
-3. `Insert` succeeds: ack. A duplicate `dedupe_key` is not an error (the insert
-   is `INSERT ... ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key`, a no-op), so a redelivered or republished event is acked and
-   stores nothing new.
+3. `Insert` succeeds: ack. A duplicate `dedupe_key` is not an error (the
+   insert is `INSERT ... ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key`, a
+   no-op), so a redelivered or republished event is acked and stores nothing
+   new. The row's `created_at` is the event's `occurred_at`, so a backlog does
+   not change the time shown. `Insert` runs on a context that ignores
+   shutdown, so a delivery already taken finishes instead of failing.
 4. `Insert` fails: same retry-once rule as clicks. First failure is requeued,
    a redelivered message is dead-lettered.
 
 ## Before you change it
 
+- **Dead-lettered notification events are lost.** `DLQConsumer` on
+  `notifications.dlq` only logs them; nothing replays them.
 - **Changing a queue's arguments** (for example adding a TTL or max length)
   makes `QueueDeclare` fail against the existing queue with
   `PRECONDITION_FAILED`. You have to delete the queue, or use a new name, as

@@ -11,17 +11,30 @@ func NewNotificationService(repo NotificationRepository) *NotificationService {
 	return &NotificationService{repo: repo}
 }
 
-// List returns one page (NotificationPageSize) older than beforeID (0 = newest) and the user's unread count.
-func (s *NotificationService) List(ctx context.Context, userID, beforeID int64) ([]*Notification, int64, error) {
-	items, err := s.repo.ListByUser(ctx, userID, beforeID, NotificationPageSize)
+// NotificationPage is one page of a user's notifications.
+type NotificationPage struct {
+	Items   []*Notification
+	HasMore bool  // an older page exists
+	Unread  int64 // the user's unread count over all pages
+}
+
+// List returns one page (NotificationPageSize) older than beforeID (0 = newest)
+// and the user's unread count. It asks for one extra row to tell whether an
+// older page exists, so a full last page does not lead to an empty one.
+func (s *NotificationService) List(ctx context.Context, userID, beforeID int64) (*NotificationPage, error) {
+	items, err := s.repo.ListByUser(ctx, userID, beforeID, NotificationPageSize+1)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
+	}
+	more := len(items) > NotificationPageSize
+	if more {
+		items = items[:NotificationPageSize]
 	}
 	unread, err := s.repo.CountUnread(ctx, userID)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	return items, unread, nil
+	return &NotificationPage{Items: items, HasMore: more, Unread: unread}, nil
 }
 
 // MarkRead marks one notification read. ErrNotFound passes through.

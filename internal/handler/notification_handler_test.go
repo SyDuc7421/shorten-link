@@ -13,12 +13,12 @@ import (
 )
 
 type mockNotifSvc struct {
-	listFn    func(ctx context.Context, userID, beforeID int64) ([]*service.Notification, int64, error)
+	listFn    func(ctx context.Context, userID, beforeID int64) (*service.NotificationPage, error)
 	markFn    func(ctx context.Context, userID, id int64) error
 	markAllFn func(ctx context.Context, userID int64) error
 }
 
-func (m *mockNotifSvc) List(ctx context.Context, userID, beforeID int64) ([]*service.Notification, int64, error) {
+func (m *mockNotifSvc) List(ctx context.Context, userID, beforeID int64) (*service.NotificationPage, error) {
 	return m.listFn(ctx, userID, beforeID)
 }
 func (m *mockNotifSvc) MarkRead(ctx context.Context, userID, id int64) error {
@@ -58,9 +58,9 @@ func TestNotifications_List(t *testing.T) {
 	var gotUser, gotBefore int64
 	rows := notifRows(3)
 	rows[0] = &service.Notification{ID: 12, Type: service.NotificationLinkExpiring, LinkID: &linkID, ShortCode: &code, ExpiresAt: &exp, CreatedAt: exp}
-	mux := newNotifMux(&mockNotifSvc{listFn: func(_ context.Context, u, b int64) ([]*service.Notification, int64, error) {
+	mux := newNotifMux(&mockNotifSvc{listFn: func(_ context.Context, u, b int64) (*service.NotificationPage, error) {
 		gotUser, gotBefore = u, b
-		return rows, 3, nil
+		return &service.NotificationPage{Items: rows, Unread: 3}, nil
 	}})
 	w := notifDo(mux, "GET", "/api/notifications?cursor=99", false)
 	if w.Code != http.StatusOK {
@@ -92,24 +92,37 @@ func TestNotifications_List(t *testing.T) {
 		t.Errorf("code must be present and null: %#v", pw)
 	}
 
-	// a full page sets next_cursor to the last id
+	// more rows left: next_cursor is the last id
 	full := notifRows(service.NotificationPageSize)
-	mux = newNotifMux(&mockNotifSvc{listFn: func(context.Context, int64, int64) ([]*service.Notification, int64, error) {
-		return full, 0, nil
+	mux = newNotifMux(&mockNotifSvc{listFn: func(context.Context, int64, int64) (*service.NotificationPage, error) {
+		return &service.NotificationPage{Items: full, HasMore: true}, nil
 	}})
 	w = notifDo(mux, "GET", "/api/notifications", false)
 	json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
 	if resp.Next != idString(full[len(full)-1].ID) {
 		t.Errorf("next_cursor = %q", resp.Next)
 	}
+
+	// a full last page: no next_cursor
+	mux = newNotifMux(&mockNotifSvc{listFn: func(context.Context, int64, int64) (*service.NotificationPage, error) {
+		return &service.NotificationPage{Items: full}, nil
+	}})
+	w = notifDo(mux, "GET", "/api/notifications", false)
+	resp.Next = "unset"
+	json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
+	if resp.Next != "" {
+		t.Errorf("last page next_cursor = %q, want empty", resp.Next)
+	}
 }
 
 func idString(id int64) string { b, _ := json.Marshal(id); return string(b) }
 
 func TestNotifications_ListBadCursor(t *testing.T) {
-	w := notifDo(newNotifMux(&mockNotifSvc{}), "GET", "/api/notifications?cursor=abc", false)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("got %d", w.Code)
+	for _, c := range []string{"abc", "0", "-5"} {
+		w := notifDo(newNotifMux(&mockNotifSvc{}), "GET", "/api/notifications?cursor="+c, false)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("cursor=%s: got %d", c, w.Code)
+		}
 	}
 }
 

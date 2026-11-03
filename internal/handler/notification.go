@@ -12,7 +12,7 @@ import (
 
 // NotificationServicer is the subset of NotificationService used by handlers.
 type NotificationServicer interface {
-	List(ctx context.Context, userID, beforeID int64) ([]*service.Notification, int64, error)
+	List(ctx context.Context, userID, beforeID int64) (*service.NotificationPage, error)
 	MarkRead(ctx context.Context, userID, id int64) error
 	MarkAllRead(ctx context.Context, userID int64) error
 }
@@ -63,26 +63,26 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 	var beforeID int64
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
 		id, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
+		if err != nil || id <= 0 {
 			writeError(w, http.StatusBadRequest, "invalid cursor")
 			return
 		}
 		beforeID = id
 	}
-	items, unread, err := h.svc.List(r.Context(), userID, beforeID)
+	page, err := h.svc.List(r.Context(), userID, beforeID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list notifications")
 		return
 	}
-	out := make([]map[string]any, len(items))
-	for i, n := range items {
+	out := make([]map[string]any, len(page.Items))
+	for i, n := range page.Items {
 		out[i] = notificationJSON(n)
 	}
 	var next string
-	if len(items) == service.NotificationPageSize {
-		next = idString(items[len(items)-1].ID)
+	if page.HasMore && len(page.Items) > 0 {
+		next = idString(page.Items[len(page.Items)-1].ID)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out, "next_cursor": next, "unread_count": unread})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "next_cursor": next, "unread_count": page.Unread})
 }
 
 // MarkRead handles POST /api/notifications/{id}/read

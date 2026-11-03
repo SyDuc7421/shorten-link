@@ -44,6 +44,12 @@ repositories.
 | `GET /api/notifications?cursor=` | ✔ | `NotificationHandler.List` | `notification.go` |
 | `POST /api/notifications/{id}/read` | ✔ | `NotificationHandler.MarkRead` | `notification.go` |
 | `POST /api/notifications/read-all` | ✔ | `NotificationHandler.ReadAll` | `notification.go` |
+
+`GET /api/notifications` answers 400 for a `cursor` that is not a positive
+integer. `next_cursor` is the last item's id only when the service reports an
+older page (`HasMore`), else `""`. This differs from `/api/links` and the admin
+lists, which set `next_cursor` whenever the page is full and so can lead to one
+empty page at the end.
 | `GET /healthz` | — | `HealthChecker.Health` | `health.go` |
 | `GET /docs`, `GET /api/openapi.yaml` | — | `RegisterDocs` | `docs.go` |
 

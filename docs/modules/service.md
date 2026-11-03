@@ -321,10 +321,13 @@ routing keys, `ExpiryWarningWindow` (24 h), `NotificationPageSize` (20) and the
 notifications. It is thin and has no rules of its own beyond scoping every call
 to the user id:
 
-- **`List(userID, beforeID)`** returns one page of `NotificationPageSize`
-  rows, newest first, with ids below `beforeID` (0 = from the newest), and the
-  user's unread count. These are two queries, so the count can be a moment out
-  of step with the page.
+- **`List(userID, beforeID)`** returns a `NotificationPage`: up to
+  `NotificationPageSize` rows, newest first, with ids below `beforeID` (0 =
+  from the newest), `HasMore` and the user's unread count. It asks the
+  repository for one extra row; if that row comes back, an older page exists
+  (`HasMore`) and the row is dropped. So a last page that is exactly full does
+  not send the client to an empty page. The rows and the count are two
+  queries, so the count can be a moment out of step with the page.
 - **`MarkRead(userID, id)`** passes `ErrNotFound` through for a missing id and
   for another user's id alike, so a user cannot probe for other ids.
 - **`MarkAllRead(userID)`** marks every unread row of that user.

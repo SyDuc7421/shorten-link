@@ -120,7 +120,7 @@ func TestNotificationConsumer_RetriesOnceThenDLQ(t *testing.T) {
 }
 
 func TestNotificationConsumer_DuplicateIsAcked(t *testing.T) {
-	repo := &fakeNotifRepo{} // Insert returns nil, as INSERT IGNORE does for a duplicate
+	repo := &fakeNotifRepo{} // Insert returns nil, as the ON DUPLICATE KEY no-op does for a duplicate
 	ack := &fakeAck{}
 	newTestNotifConsumer(repo).handle(context.Background(), amqp.Delivery{
 		Acknowledger: ack, RoutingKey: service.RoutePasswordChanged,

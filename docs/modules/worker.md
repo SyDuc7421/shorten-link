@@ -32,7 +32,7 @@ memory; they only meet through RabbitMQ and MySQL.
   all four consumers to return (the click consumer flushes its last batch first),
   and the process exits 0; or
 - **a consumer stops on its own**, usually because the RabbitMQ connection
-  dropped: it cancels the other consumer, waits for it, and the process exits
+  dropped: it cancels the others, waits for them, and the process exits
   **1**. Exiting non-zero tells Docker (`restart: unless-stopped`) that
   something went wrong, and the restart reconnects from scratch.
 

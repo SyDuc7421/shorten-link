@@ -123,7 +123,7 @@ only limits how many are in flight). `handle` settles each delivery:
    an empty `short_code` is rejected the same way. `user.password_changed`
    carries no link, so its `LinkID` and `ShortCode` stay nil.
 3. `Insert` succeeds: ack. A duplicate `dedupe_key` is not an error (the insert
-   is `INSERT IGNORE`), so a redelivered or republished event is acked and
+   is `INSERT ... ON DUPLICATE KEY UPDATE dedupe_key = dedupe_key`, a no-op), so a redelivered or republished event is acked and
    stores nothing new.
 4. `Insert` fails: same retry-once rule as clicks. First failure is requeued,
    a redelivered message is dead-lettered.

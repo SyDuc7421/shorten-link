@@ -210,17 +210,14 @@ func (h *LinkHandler) List(w http.ResponseWriter, r *http.Request) {
 		afterID = id
 	}
 
+	// One row more than a page: if it comes back, an older page exists.
 	const pageSize = 20
-	links, err := h.svc.ListByUser(r.Context(), userID, afterID, pageSize)
+	links, err := h.svc.ListByUser(r.Context(), userID, afterID, pageSize+1)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list links")
 		return
 	}
-
-	var nextCursor string
-	if len(links) == pageSize {
-		nextCursor = strconv.FormatInt(links[len(links)-1].ID, 10)
-	}
+	links, nextCursor := trimPage(links, pageSize, func(l *service.Link) int64 { return l.ID })
 
 	type linkResp struct {
 		ID          int64      `json:"id"`

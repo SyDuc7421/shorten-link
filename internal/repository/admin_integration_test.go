@@ -63,8 +63,9 @@ func TestAdminMySQL_ListUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(page1) != 20 || page1[0].ID != 25 || page1[19].ID != 6 {
-		t.Fatalf("page 1: want 20 rows 25..6, got %d rows, first %d", len(page1), page1[0].ID)
+	// one row more than a page, so the handler can tell an older page exists
+	if len(page1) != 21 || page1[0].ID != 25 || page1[19].ID != 6 {
+		t.Fatalf("page 1: want 21 rows 25..5, got %d rows, first %d", len(page1), page1[0].ID)
 	}
 	page2, _ := repo.ListUsers(ctx, service.UserFilter{BeforeID: page1[19].ID})
 	if len(page2) != 5 || page2[0].ID != 5 {
@@ -84,8 +85,8 @@ func TestAdminMySQL_ListUsers(t *testing.T) {
 		t.Errorf("disabled: want users 5,4, got %+v", got)
 	}
 	got, _ = repo.ListUsers(ctx, service.UserFilter{Status: "active"})
-	if len(got) != 20 {
-		t.Errorf("active: want a full page, got %d", len(got))
+	if len(got) != 21 {
+		t.Errorf("active: want a full page plus one, got %d", len(got))
 	}
 	for _, u := range got {
 		if u.DisabledAt != nil {

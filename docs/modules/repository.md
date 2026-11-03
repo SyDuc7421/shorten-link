@@ -75,7 +75,8 @@ cannot tell "no such user" apart from "same hash".
 Backs the admin API (see `AdminService` in [service.md](service.md)).
 
 **Lists** (`ListUsers`, `ListLinks`, `ListAudit`) return at most
-`service.AdminPageSize` (20) rows, newest first, with keyset paging on `id`
+`service.AdminPageSize`+1 (21) rows, newest first. The extra row only tells the
+handler that an older page exists; it is never shown. Paging is keyset on `id`
 (`BeforeID` → `id < ?`). Filters are added as `AND` conditions by a small
 `filter` helper, so the SQL and its arguments stay in the same order. Text
 search is `LIKE '%q%'` with `%`, `_` and `\` in the query escaped

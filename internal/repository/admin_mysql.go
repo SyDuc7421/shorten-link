@@ -151,7 +151,7 @@ func (r *adminMySQL) ListUsers(ctx context.Context, f service.UserFilter) ([]*se
 		ORDER BY u.id DESC
 		LIMIT ?`
 	var rows []adminUserRow
-	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize)...); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize+1)...); err != nil {
 		return nil, fmt.Errorf("repository: list users: %w", err)
 	}
 	users := make([]*service.AdminUser, len(rows))
@@ -329,7 +329,7 @@ func (r *adminMySQL) ListLinks(ctx context.Context, f service.LinkFilter) ([]*se
 		ORDER BY l.id DESC
 		LIMIT ?`
 	var rows []adminLinkRow
-	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize)...); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize+1)...); err != nil {
 		return nil, fmt.Errorf("repository: list links: %w", err)
 	}
 	links := make([]*service.AdminLink, len(rows))
@@ -423,7 +423,7 @@ func (r *adminMySQL) ListAudit(ctx context.Context, f service.AuditFilter) ([]*s
 		Metadata     string    `db:"metadata"`
 		CreatedAt    time.Time `db:"created_at"`
 	}
-	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize)...); err != nil {
+	if err := r.db.SelectContext(ctx, &rows, q, append(w.args, service.AdminPageSize+1)...); err != nil {
 		return nil, fmt.Errorf("repository: list audit: %w", err)
 	}
 	entries := make([]*service.AuditEntry, len(rows))

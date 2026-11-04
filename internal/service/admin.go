@@ -120,6 +120,8 @@ type Stats struct {
 // AdminRepository is the persistence interface for admin operations. Every
 // write runs in one transaction with its audit_log row; changed=false means the
 // row was already in that state and nothing (no audit row) was written.
+// ListUsers, ListLinks and ListAudit return up to AdminPageSize+1 rows: the
+// extra row only tells the handler that an older page exists.
 type AdminRepository interface {
 	ListUsers(ctx context.Context, f UserFilter) ([]*AdminUser, error)
 	GetUser(ctx context.Context, id, todaySinceID int64) (*AdminUser, error)

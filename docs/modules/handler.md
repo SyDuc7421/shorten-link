@@ -12,7 +12,7 @@ about links or users in a handler, it belongs in [service](service.md).
 
 **Where it sits.** `cmd/server` builds the handlers and calls their `Register`
 methods. Handlers depend on small interfaces they declare themselves
-(`LinkServicer`, `AuthServicer`, `ConnStatus`), never on concrete services or
+(`LinkServicer`, `AuthServicer`, `NotificationServicer`, `ConnStatus`), never on concrete services or
 repositories.
 
 ## Routes
@@ -41,8 +41,20 @@ repositories.
 | `DELETE /api/admin/links/{code}` | admin | `AdminHandler.DeleteLink` | `admin.go` |
 | `GET /api/admin/audit` | admin | `AdminHandler.ListAudit` | `admin.go` |
 | `GET /api/admin/stats` | admin | `AdminHandler.Stats` | `admin.go` |
+| `GET /api/notifications?cursor=` | ✔ | `NotificationHandler.List` | `notification.go` |
+| `POST /api/notifications/{id}/read` | ✔ | `NotificationHandler.MarkRead` | `notification.go` |
+| `POST /api/notifications/read-all` | ✔ | `NotificationHandler.ReadAll` | `notification.go` |
 | `GET /healthz` | — | `HealthChecker.Health` | `health.go` |
 | `GET /docs`, `GET /api/openapi.yaml` | — | `RegisterDocs` | `docs.go` |
+
+**Paging.** Every list (`/api/links`, `/api/notifications`, the admin lists)
+asks for one row more than a page. If that row comes back, an older page
+exists: the row is dropped and `next_cursor` is the last kept row's ID.
+Otherwise `next_cursor` is `""`, even when the page is exactly full, so a
+client never fetches an empty page at the end. `trimPage` in `admin.go` does
+this for links and the admin lists; notifications get `HasMore` from the
+service. `GET /api/links` and `GET /api/notifications` answer 400 for a
+`cursor` that is not a positive integer (the admin lists already did).
 
 Routing uses Go's standard `http.ServeMux` patterns (`"GET /{code}"`). When two
 patterns match, the more specific one wins, so `GET /docs` beats `GET /{code}`.
@@ -73,8 +85,9 @@ custom aliases.
 for an unknown, expired or deleted code.
 
 **List: `GET /api/links`.** Returns the caller's links, 20 per page, oldest
-first. `next_cursor` is the ID of the last link on the page, or an empty string
-on the last page. Pass it back as `?cursor=`.
+first. `next_cursor` is the ID of the last link on the page when more links
+follow, or an empty string on the last page (see **Paging** above). Pass it
+back as `?cursor=`.
 
 **Check alias: `GET /api/links/availability?alias=`.** Always `200` when the
 check ran. The body is `{"alias", "available", "reason"}`, where `reason` is
@@ -121,8 +134,8 @@ context; it is passed to the service as `actorID` for the audit log.
 **JSON.** IDs are always strings (`"id": "7311..."`): snowflake IDs are larger
 than 2^53, and a JavaScript `number` would silently round them. Lists return
 `{"users"|"links"|"entries": [...], "next_cursor": "..."}`, 20 rows, newest
-first; `next_cursor` is the last row's ID when the page is full and `""` on the
-last page. User detail endpoints add `links_today` and `total_clicks`. An audit
+first; `next_cursor` is the last row's ID when an older page exists and `""`
+on the last page (see **Paging** above). User detail endpoints add `links_today` and `total_clicks`. An audit
 entry's `actor` is `null` for the `server admin` command. `GET /stats`
 returns `{"totals": {...}, "daily": [{"date": "YYYY-MM-DD", ...}], "top_links": [...]}`;
 `days` defaults to 30 and both arrays are `[]`, never `null`.

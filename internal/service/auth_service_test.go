@@ -229,7 +229,7 @@ func newAuthSvc(t *testing.T, userRepo service.UserRepository, tokenCache servic
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey, newMockMailer(), mustParseResetURL(t, testResetURL))
+	return service.NewAuthService(userRepo, tokenCache, gen, key, &key.PublicKey, newMockMailer(), mustParseResetURL(t, testResetURL), service.NoopPublisher{})
 }
 
 const testResetURL = "https://app.example.com/reset-password"
@@ -247,9 +247,27 @@ func mustParseResetURL(t *testing.T, raw string) *url.URL {
 
 type sentMail struct{ to, link string }
 
-type mockMailer struct{ sent chan sentMail }
+// changedMail is a password-changed notice. It has its own channel so that
+// next and none keep seeing only reset-link mails.
+type changedMail struct {
+	to        string
+	changedAt time.Time
+	forgotURL string
+}
 
-func newMockMailer() *mockMailer { return &mockMailer{sent: make(chan sentMail, 10)} }
+type mockMailer struct {
+	sent    chan sentMail
+	changed chan changedMail
+}
+
+func newMockMailer() *mockMailer {
+	return &mockMailer{sent: make(chan sentMail, 10), changed: make(chan changedMail, 10)}
+}
+
+func (m *mockMailer) SendPasswordChanged(_ context.Context, to string, changedAt time.Time, forgotURL string) error {
+	m.changed <- changedMail{to, changedAt, forgotURL}
+	return nil
+}
 
 func (m *mockMailer) SendPasswordReset(_ context.Context, to, link string) error {
 	m.sent <- sentMail{to, link}
@@ -280,6 +298,16 @@ func (m *mockMailer) none(t *testing.T) {
 
 func newAuthSvcWithMailer(t *testing.T, users *mockUserRepo, tokens *mockTokenCache) (*service.AuthService, *mockMailer) {
 	t.Helper()
+	return newAuthSvcWithPub(t, users, tokens, service.NoopPublisher{})
+}
+
+func newAuthSvcWithPub(t *testing.T, users *mockUserRepo, tokens *mockTokenCache, pub service.Publisher) (*service.AuthService, *mockMailer) {
+	t.Helper()
+	return newAuthSvcWithURL(t, users, tokens, pub, testResetURL)
+}
+
+func newAuthSvcWithURL(t *testing.T, users *mockUserRepo, tokens *mockTokenCache, pub service.Publisher, resetURL string) (*service.AuthService, *mockMailer) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +317,7 @@ func newAuthSvcWithMailer(t *testing.T, users *mockUserRepo, tokens *mockTokenCa
 		t.Fatal(err)
 	}
 	mailer := newMockMailer()
-	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, mustParseResetURL(t, testResetURL)), mailer
+	return service.NewAuthService(users, tokens, gen, key, &key.PublicKey, mailer, mustParseResetURL(t, resetURL), pub), mailer
 }
 
 // tokenFromLink extracts ?token= from a mailed reset link.
@@ -780,5 +808,136 @@ func TestRefresh_DisabledUser(t *testing.T) {
 	_, err := svc.Refresh(context.Background(), pair.RefreshToken)
 	if !errors.Is(err, service.ErrInvalidToken) {
 		t.Errorf("want ErrInvalidToken, got %v", err)
+	}
+}
+
+func TestResetPassword_NotifiesAndMails(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	pub := newChanPub(nil)
+	svc, mailer := newAuthSvcWithPub(t, users, tokens, pub)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	userID := users.users["a@x.com"].ID
+
+	before := time.Now().UTC().Add(-time.Second)
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	select {
+	case m := <-mailer.changed:
+		if m.to != "a@x.com" {
+			t.Errorf("password-changed mail to %q, want a@x.com", m.to)
+		}
+		if m.forgotURL != "https://app.example.com/forgot-password" {
+			t.Errorf("forgotURL = %q, want https://app.example.com/forgot-password", m.forgotURL)
+		}
+		if m.changedAt.Before(before) || m.changedAt.Location() != time.UTC {
+			t.Errorf("changedAt = %v, want a recent UTC time", m.changedAt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no password-changed mail sent")
+	}
+
+	c, ok := pub.next(t, 2*time.Second)
+	if !ok {
+		t.Fatal("no event published")
+	}
+	if c.key != service.RoutePasswordChanged {
+		t.Errorf("routing key = %q, want %q", c.key, service.RoutePasswordChanged)
+	}
+	ev, _ := c.payload.(service.NotificationEvent)
+	if ev.UserID != userID || ev.LinkID != 0 || !strings.HasPrefix(ev.DedupeKey, "password:") || ev.OccurredAt.IsZero() {
+		t.Errorf("event = %+v, want user %d, link 0, dedupe key password:<uuid>", ev, userID)
+	}
+	if _, more := pub.next(t, 100*time.Millisecond); more {
+		t.Error("want exactly one event")
+	}
+}
+
+func TestResetPassword_InvalidTokenNoNotify(t *testing.T) {
+	pub := newChanPub(nil)
+	svc, mailer := newAuthSvcWithPub(t, newMockUserRepo(), newMockTokenCache(), pub)
+	if err := svc.ResetPassword(context.Background(), "not-a-real-token", "new-password"); !errors.Is(err, service.ErrInvalidToken) {
+		t.Fatalf("want ErrInvalidToken, got %v", err)
+	}
+	if _, ok := pub.next(t, 100*time.Millisecond); ok {
+		t.Error("event published for an invalid token")
+	}
+	select {
+	case m := <-mailer.changed:
+		t.Errorf("unexpected mail to %s", m.to)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// Once the new hash is saved the password has changed, even if the reset then
+// fails because sessions could not be revoked. The owner must still be told.
+func TestResetPassword_RevokeFailsAfterChange_StillNotifies(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	pub := newChanPub(nil)
+	svc, mailer := newAuthSvcWithPub(t, users, tokens, pub)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+	// first revoke ok, every retry after the change fails
+	down := errors.New("redis timeout")
+	tokens.revokeErrs = []error{nil, down, down, down}
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err == nil {
+		t.Fatal("want error when sessions cannot be revoked after the change")
+	}
+	select {
+	case m := <-mailer.changed:
+		if m.to != "a@x.com" {
+			t.Errorf("mail to %q, want a@x.com", m.to)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no password-changed mail sent")
+	}
+	if c, ok := pub.next(t, 2*time.Second); !ok || c.key != service.RoutePasswordChanged {
+		t.Fatalf("want a %s event, got %+v (ok=%v)", service.RoutePasswordChanged, c, ok)
+	}
+}
+
+func TestResetPassword_PublishFailureStillMails(t *testing.T) {
+	users, tokens := newMockUserRepo(), newMockTokenCache()
+	pub := newChanPub(errors.New("broker down"))
+	svc, mailer := newAuthSvcWithPub(t, users, tokens, pub)
+	token := requestResetToken(t, svc, mailer, "a@x.com")
+
+	if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+		t.Fatalf("reset must succeed when the publish fails: %v", err)
+	}
+	select {
+	case m := <-mailer.changed:
+		if m.to != "a@x.com" {
+			t.Errorf("mail to %q, want a@x.com", m.to)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no password-changed mail sent")
+	}
+}
+
+func TestResetPassword_ForgotURLFromResetURL(t *testing.T) {
+	cases := []struct{ resetURL, want string }{
+		{"https://app.example.com/reset-password", "https://app.example.com/forgot-password"},
+		{"https://app.example.com/reset-password/", "https://app.example.com/forgot-password"},
+		{"https://app.example.com/en/reset-password", "https://app.example.com/en/forgot-password"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.resetURL, func(t *testing.T) {
+			users, tokens := newMockUserRepo(), newMockTokenCache()
+			svc, mailer := newAuthSvcWithURL(t, users, tokens, service.NoopPublisher{}, tc.resetURL)
+			token := requestResetToken(t, svc, mailer, "a@x.com")
+			if err := svc.ResetPassword(context.Background(), token, "new-password"); err != nil {
+				t.Fatalf("reset: %v", err)
+			}
+			select {
+			case m := <-mailer.changed:
+				if m.forgotURL != tc.want {
+					t.Errorf("forgotURL = %q, want %q", m.forgotURL, tc.want)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("no password-changed mail")
+			}
+		})
 	}
 }

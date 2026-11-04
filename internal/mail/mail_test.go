@@ -54,6 +54,86 @@ func TestPasswordResetMessage_RejectsHeaderInjection(t *testing.T) {
 	}
 }
 
+func TestPasswordChangedMessage(t *testing.T) {
+	at := time.Date(2026, 11, 3, 14, 5, 6, 0, time.FixedZone("x", 7*3600))
+	forgot := "https://app.example.com/forgot-password"
+	msg, err := passwordChangedMessage("no-reply@example.com", "user@example.com", at, forgot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	s := string(msg)
+	for _, want := range []string{
+		"From: no-reply@example.com\r\n",
+		"To: user@example.com\r\n",
+		"Subject: Your password was changed\r\n",
+		"Date: ",
+		"MIME-Version: 1.0\r\n",
+		"Content-Type: text/plain; charset=UTF-8\r\n",
+		at.UTC().Format(time.RFC1123),
+		forgot,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("message missing %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, "token=") {
+		t.Errorf("message must carry no token:\n%s", s)
+	}
+}
+
+func TestPasswordChangedMessage_RejectsHeaderInjection(t *testing.T) {
+	for _, tc := range []struct{ from, to string }{
+		{"no-reply@example.com", "a@x.com\r\nBcc: z@y.com"},
+		{"no-reply@example.com\nBcc: z@y.com", "a@x.com"},
+	} {
+		if _, err := passwordChangedMessage(tc.from, tc.to, time.Now(), "https://x/forgot-password"); err == nil {
+			t.Errorf("from %q to %q: want error, got nil", tc.from, tc.to)
+		}
+	}
+}
+
+func TestSMTPMailer_SendPasswordChanged(t *testing.T) {
+	addr, got := fakeSMTP(t, fakeOpts{})
+	host, port := splitHostPort(t, addr)
+	m := NewSMTPMailer(SMTPConfig{Host: host, Port: port, From: "no-reply@example.com"}, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.SendPasswordChanged(ctx, "user@example.com", time.Now(), "https://x/forgot-password"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	s := <-got
+	for _, want := range []string{"RCPT TO:<user@example.com>", "Subject: Your password was changed", "https://x/forgot-password"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("session missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestSMTPMailer_SendPasswordChangedLogsFailure(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	m := NewSMTPMailer(SMTPConfig{Host: "127.0.0.1", Port: 1, From: "no-reply@example.com"}, zap.New(core))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := m.SendPasswordChanged(ctx, "user@example.com", time.Now(), "https://x/forgot-password"); err == nil {
+		t.Fatal("want error for unreachable server")
+	}
+	if logs.Len() != 1 {
+		t.Errorf("want the failure logged once, got %d entries", logs.Len())
+	}
+}
+
+func TestLogMailer_SendPasswordChangedLogsTo(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	m := NewLogMailer(zap.New(core))
+	if err := m.SendPasswordChanged(context.Background(), "user@example.com", time.Now(), "https://x/forgot-password"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if logs.Len() != 1 || logs.All()[0].ContextMap()["to"] != "user@example.com" {
+		t.Errorf("want one log entry with to, got %v", logs.All())
+	}
+}
+
 func TestLogMailer_LogsLink(t *testing.T) {
 	core, logs := observer.New(zap.InfoLevel)
 	m := NewLogMailer(zap.New(core))

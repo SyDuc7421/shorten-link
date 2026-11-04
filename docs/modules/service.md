@@ -14,8 +14,9 @@ interfaces it declares itself, in `link.go`, `auth.go` and `admin.go`:
 | `Publisher` | `messaging.Publisher` (or `NoopPublisher`) | Send events such as clicks |
 | `UserRepository` | `repository.userMySQL` | Store and read users |
 | `TokenCache` | `repository.tokenRedis` | Refresh tokens, the per-user session index, login-failure counters, password reset tokens |
-| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email |
+| `Mailer` | `mail.SMTPMailer` or `mail.LogMailer` | Send the password reset email and the password-changed notice |
 | `AdminRepository` | `repository.adminMySQL` | Admin lists and audited writes |
+| `NotificationRepository` | `repository.notificationMySQL` | Store and read in-app notifications, find links about to expire |
 
 Because the interfaces live here, service tests use small in-file mocks and
 run without any database.
@@ -219,11 +220,24 @@ In the background:
 2. Consume the token by its hash (atomic, single use). Unknown, expired or used:
    `ErrInvalidToken`.
 3. Load the user and bcrypt the new password.
-4. **Revoke all sessions**, then update the password hash, then **revoke again**
-   (retried up to 3 times). The first revoke means that if anything later
-   fails, the existing sessions are already gone. The second catches a login
-   with the old password or a refresh that was in flight during the change.
-5. Clear the lockout counter and the reset pointer.
+4. **Revoke all sessions**, then update the password hash.
+5. Tell the user, in the background, so neither can fail the reset. This runs
+   right after the hash is saved, before the second revoke: from that point
+   the password has changed, so the owner is told even if the second revoke
+   then fails and the call returns an error. `now` is taken once (UTC).
+   `publishAsync` publishes `user.password_changed` with a `NotificationEvent`
+   (`DedupeKey` `password:<uuid>`, the user id, `OccurredAt` = `now`, no link);
+   the worker turns it into an in-app `password_changed` notification. And
+   `runAsync` calls `Mailer.SendPasswordChanged(user.Email, now, forgotURL)`.
+   `forgotURL` is computed once in `NewAuthService`: `resetURL` with its last
+   path segment replaced by `forgot-password` and no query. The mail has no
+   token. If RabbitMQ is down the notification is lost and the reset still
+   succeeds; a failed mail is only logged.
+6. **Revoke again** (retried up to 3 times). The first revoke means that if
+   anything later fails, the existing sessions are already gone. The second
+   catches a login with the old password or a refresh that was in flight
+   during the change.
+7. Clear the lockout counter and the reset pointer.
 
 If the first revoke fails, the password is left unchanged and the call fails.
 In every failure case the token is already consumed and the user requests a new
@@ -270,6 +284,16 @@ cache consistent with the database.
     three if they are ever seen in practice.
 - **Link disable/enable/delete** write through the repository, then delete
   `sl:<code>`.
+- **Link disable/enable events.** After the cache purge and a successful
+  `GetLink`, `DisableLink` and `EnableLink` publish `link.disabled` or
+  `link.enabled`, but only when the repository reports that the state really
+  changed. The body is a `NotificationEvent` with the owner's id, the link id
+  and code, `OccurredAt`, and a dedupe key `disabled:<uuid>` or
+  `enabled:<uuid>` (one per action). The admin's reason is never included.
+  Publishing goes through `publishAsync` (`publish.go`): a goroutine with a
+  fresh `publishTimeout` (2 s) context that logs a warning with the routing key
+  on failure. A broker problem never fails or slows the admin request, and the
+  event is lost if the publish fails. User disable/enable publishes nothing.
 - **`GetUser`** adds links created today (UTC, via `idgen.MinIDAt`) and total
   clicks.
 - **`Stats(days)`** (1–90) asks the repository for totals, the per-day rows
@@ -285,6 +309,46 @@ cache consistent with the database.
 - **`SetAdmin(email, admin)`** is for the CLI: it lower-cases the email and
   sets the role with actor `0` (system).
 
+## Notifications (`notification.go`, `notification_service.go`)
+
+`notification.go` holds the shared vocabulary: the `Notification` row, the
+`NotificationEvent` that travels over RabbitMQ, the four types
+(`link_disabled`, `link_enabled`, `link_expiring`, `password_changed`), their
+routing keys, `ExpiryWarningWindow` (24 h), `NotificationPageSize` (20) and the
+`NotificationRepository` interface.
+
+`NotificationService` is what the API server uses to let a user read their own
+notifications. It is thin and has no rules of its own beyond scoping every call
+to the user id:
+
+- **`List(userID, beforeID)`** returns a `NotificationPage`: up to
+  `NotificationPageSize` rows, newest first, with ids below `beforeID` (0 =
+  from the newest), `HasMore` and the user's unread count. It asks the
+  repository for one extra row; if that row comes back, an older page exists
+  (`HasMore`) and the row is dropped. So a last page that is exactly full does
+  not send the client to an empty page. The rows and the count are two
+  queries, so the count can be a moment out of step with the page.
+- **`MarkRead(userID, id)`** passes `ErrNotFound` through for a missing id and
+  for another user's id alike, so a user cannot probe for other ids.
+- **`MarkAllRead(userID)`** marks every unread row of that user.
+
+Notifications are created elsewhere (the worker); the service never inserts.
+
+### Expiry scanner (`expiry_scanner.go`)
+
+`ExpiryScanner` runs inside the worker, not the server. `ScanOnce(now)` asks
+`NotificationRepository.ExpiringLinks` for up to 500 links that expire within
+`ExpiryWarningWindow` (24 hours) and have no `expiring:<id>` notification yet,
+then publishes one `link.expiring` event per link with the dedupe key
+`expiring:<link_id>`. Each publish is synchronous and has its own
+`publishTimeout` (2 s). A failed publish is logged as a warning and skipped;
+no notification row exists yet, so the next scan finds the link again. It
+returns an error only when the repository query fails.
+
+`Run(ctx, interval)` scans once right away, then on every tick, until `ctx` is
+cancelled, and returns nil. A scan error is logged and the loop keeps going.
+Known gap: if more than 500 links qualify, the rest wait for later scans.
+
 ## Before you change it
 
 - **New rule = new test first.** The mocks at the top of `link_service_test.go`
@@ -299,7 +363,10 @@ cache consistent with the database.
   but only a password reset triggers it; there is no endpoint for it yet.
 - The password reset tests use `mockMailer`, which records mails on a channel
   because they are sent from a goroutine. `next` waits for one; `none` checks
-  that nothing arrives within 100 ms.
+  that nothing arrives within 100 ms. Both only see reset-link mails;
+  password-changed notices go to a separate channel (`changed`). The
+  publisher is a `chanPub` (see `admin_service_test.go`) via
+  `newAuthSvcWithPub`.
 - Lockout has two known gaps. The check and the increment are separate steps,
   so parallel login attempts that all pass the check before any increment can
   try more than 5 passwords. And `INCR` and `EXPIRE` are separate Redis calls,

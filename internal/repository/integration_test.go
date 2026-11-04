@@ -71,6 +71,7 @@ func setupMySQL(t *testing.T) *sqlx.DB {
 		"006_admin.up.sql",
 		"007_analytics_daily_primary_key.up.sql",
 		"008_analytics_daily_stat_date_index.up.sql",
+		"009_create_notifications.up.sql",
 	} {
 		b, err := os.ReadFile(filepath.Join(migs, f))
 		if err != nil {

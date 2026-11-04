@@ -38,7 +38,7 @@ so running it twice does nothing the second time.
 | `short_code` | Unique, `VARCHAR(16)`, **case-sensitive** (`utf8mb4_bin`) |
 | `original_url` | `TEXT` |
 | `clicks` | Running total, updated in batches by the worker |
-| `expires_at` | `DATETIME`, nullable, stored in UTC |
+| `expires_at` | `DATETIME`, nullable, stored in UTC. Indexed (`idx_expires_at`, migration 009) for the expiry scanner |
 | `disabled_at` | `DATETIME`, nullable. Set while an admin has disabled this link |
 | `created_at`, `updated_at` | Set by MySQL |
 
@@ -63,6 +63,26 @@ One row per admin action, written in the same transaction as the change (see
 `resource_id` name the target, `metadata` is JSON (reason, before/after,
 code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 
+### `notifications`
+
+One row per in-app notification (migration 009): link events for the link's
+owner, and `password_changed` rows for any user. It stores
+structured fields, not display text, so the front end owns the wording.
+
+| Column | Notes |
+|---|---|
+| `id` | `BIGINT AUTO_INCREMENT` (rows are created in the worker, which has no id generator) |
+| `user_id` | Recipient |
+| `type` | `link_disabled`, `link_enabled`, `link_expiring` or `password_changed` |
+| `link_id`, `short_code` | `NULL` for `password_changed` |
+| `expires_at` | `DATETIME`, only for `link_expiring` |
+| `dedupe_key` | Unique (`uk_dedupe`): `disabled:<uuid>`, `enabled:<uuid>`, `password:<uuid>` or `expiring:<link_id>`. A repeated event inserts nothing |
+| `read_at` | `DATETIME`, `NULL` while unread |
+| `created_at` | `DATETIME`, the event's `occurred_at` in UTC (insert time if the event has none) |
+
+Indexed by `(user_id, id)` for the list and `(user_id, read_at)` for the
+unread count. No foreign keys, like the other tables.
+
 ## History
 
 | # | Change | Why |
@@ -75,10 +95,11 @@ code). Indexed by `(user_id, created_at)` and, since 006, `(created_at)`.
 | 006 | `users.role`, `users.disabled_at`, `links.disabled_at`, index `audit_log(created_at)` | Admin site: who may administer, and disabling without deleting |
 | 007 | `analytics_daily`: primary key `(link_id, stat_date)`, surrogate `id` dropped | With a secondary unique key, the worker's upsert took gap locks and two workers could deadlock |
 | 008 | `analytics_daily`: index `idx_stat_date (stat_date, link_id, clicks)` | Admin stats read by date range; the primary key starts with `link_id` |
+| 009 | `notifications`, index `links(expires_at)` | In-app notifications; the index lets the expiry scanner avoid a full table scan |
 
 ## Writing a migration
 
-1. Use the next number: `009_what_it_does.up.sql` and `.down.sql`.
+1. Use the next number: `010_what_it_does.up.sql` and `.down.sql`.
 2. Start the file with a comment that says **why**, not only what. The history
    table above is built from those comments.
 3. Write the `down` file even if you hope never to run it. If it can fail on

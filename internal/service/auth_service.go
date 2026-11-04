@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,8 @@ type AuthService struct {
 	publicKey  *rsa.PublicKey
 	mailer     Mailer
 	resetURL   *url.URL // GUI page; ?token= is appended. From ParseResetURL
+	forgotURL  string   // resetURL with the last path segment replaced by forgot-password; no query
+	pub        Publisher
 }
 
 // NewAuthService constructs an AuthService.
@@ -68,7 +71,12 @@ func NewAuthService(
 	publicKey *rsa.PublicKey,
 	mailer Mailer,
 	resetURL *url.URL,
+	pub Publisher,
 ) *AuthService {
+	forgot := *resetURL
+	forgot.RawQuery, forgot.Fragment = "", ""
+	forgot.Path = path.Join(path.Dir(strings.TrimSuffix(forgot.Path, "/")), "forgot-password")
+	forgot.RawPath = ""
 	return &AuthService{
 		users:      users,
 		tokens:     tokens,
@@ -77,6 +85,8 @@ func NewAuthService(
 		publicKey:  publicKey,
 		mailer:     mailer,
 		resetURL:   resetURL,
+		forgotURL:  forgot.String(),
+		pub:        pub,
 	}
 }
 
@@ -293,6 +303,19 @@ func (s *AuthService) ResetPassword(ctx context.Context, token, password string)
 	if err := s.users.UpdatePasswordHash(ctx, userID, string(hash)); err != nil {
 		return fmt.Errorf("service: update password: %w", err)
 	}
+	// The password has changed from here on, so tell the user now, even if
+	// the revoke below fails and the reset returns an error. Both run in the
+	// background: a broker or mail outage must not fail the reset.
+	now := time.Now().UTC()
+	publishAsync(ctx, s.pub, RoutePasswordChanged, NotificationEvent{
+		DedupeKey:  "password:" + uuid.NewString(),
+		UserID:     userID,
+		OccurredAt: now,
+	})
+	s.runAsync(func(ctx context.Context) {
+		s.mailer.SendPasswordChanged(ctx, user.Email, now, s.forgotURL) //nolint:errcheck // the mailer logs failures
+	})
+
 	var revokeErr error
 	for range revokeAttempts {
 		if revokeErr = s.tokens.RevokeAllRefreshTokens(ctx, userID, time.Now(), refreshTokenTTL); revokeErr == nil {

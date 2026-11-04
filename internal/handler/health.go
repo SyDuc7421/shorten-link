@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/jmoiron/sqlx"
+	"github.com/redis/go-redis/v9"
 )
 
 // ConnStatus reports whether a connection is down (*amqp.Connection and

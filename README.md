@@ -1,7 +1,8 @@
 # shorten-link
 
 URL shortener in Go: an HTTP API server (JWT auth, short-link CRUD, redirects)
-and a worker that counts clicks from RabbitMQ. Storage is MySQL, with Redis
+and a worker that counts clicks from RabbitMQ, stores notifications and scans
+for expiring links. Storage is MySQL, with Redis
 for caching and rate limiting.
 
 - Architecture: [docs/architect.md](docs/architect.md)
@@ -47,7 +48,7 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
 
    ```bash
    make run                                                  # http://localhost:8080
-   set -a && . ./.env && set +a && go run ./cmd/worker      # click counter
+   set -a && . ./.env && set +a && go run ./cmd/worker      # worker
    ```
 
 5. Check that it works:

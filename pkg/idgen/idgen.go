@@ -13,7 +13,7 @@ const (
 	nodeBits     = 10
 	sequenceBits = 12
 
-	maxNodeID   = -1 ^ (-1 << nodeBits)   // 1023
+	maxNodeID   = -1 ^ (-1 << nodeBits)     // 1023
 	maxSequence = -1 ^ (-1 << sequenceBits) // 4095
 
 	timeShift = nodeBits + sequenceBits // 22

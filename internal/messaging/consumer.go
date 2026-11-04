@@ -124,19 +124,20 @@ func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log
 
 // DLQConsumer logs dead-letter messages and acknowledges them.
 type DLQConsumer struct {
-	ch  *amqp.Channel
-	log *zap.Logger
+	ch    *amqp.Channel
+	queue string
+	log   *zap.Logger
 }
 
-// NewDLQConsumer constructs a DLQConsumer.
-func NewDLQConsumer(ch *amqp.Channel, log *zap.Logger) *DLQConsumer {
-	return &DLQConsumer{ch: ch, log: log}
+// NewDLQConsumer constructs a DLQConsumer for the given dead-letter queue.
+func NewDLQConsumer(ch *amqp.Channel, queue string, log *zap.Logger) *DLQConsumer {
+	return &DLQConsumer{ch: ch, queue: queue, log: log}
 }
 
-// Start begins consuming from the DLQ. It blocks until ctx is cancelled or
+// Start begins consuming from its dead-letter queue. It blocks until ctx is cancelled or
 // the channel is closed.
 func (c *DLQConsumer) Start(ctx context.Context) error {
-	msgs, err := c.ch.Consume(QueueDLQ, "dlq-consumer", false, false, false, false, nil)
+	msgs, err := c.ch.Consume(c.queue, c.queue+"-consumer", false, false, false, false, nil)
 	if err != nil {
 		return err
 	}

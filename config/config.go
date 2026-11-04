@@ -1,6 +1,10 @@
 package config
 
-import "github.com/kelseyhightower/envconfig"
+import (
+	"time"
+
+	"github.com/kelseyhightower/envconfig"
+)
 
 type Config struct {
 	// HTTP
@@ -25,6 +29,9 @@ type Config struct {
 
 	// RabbitMQ
 	RabbitMQURL string `envconfig:"RABBITMQ_URL" required:"true"`
+
+	// Worker: how often the expiry scanner looks for links about to expire.
+	ExpiryScanInterval time.Duration `envconfig:"EXPIRY_SCAN_INTERVAL" default:"5m"`
 
 	// JWT
 	JWTPrivateKeyPath string `envconfig:"JWT_PRIVATE_KEY_PATH" required:"true"`

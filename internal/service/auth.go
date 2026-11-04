@@ -84,6 +84,9 @@ type TokenCache interface {
 // Mailer sends account emails, defined at the consumer site. Implemented by internal/mail.
 type Mailer interface {
 	SendPasswordReset(ctx context.Context, to, link string) error
+	// SendPasswordChanged tells to that the password changed at changedAt.
+	// forgotURL is the plain forgot-password page; it carries no token.
+	SendPasswordChanged(ctx context.Context, to string, changedAt time.Time, forgotURL string) error
 }
 
 // TokenPair holds an access + refresh token pair returned on login/register/refresh.

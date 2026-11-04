@@ -35,6 +35,7 @@ WAF, captcha, payments.
 | FR-A8 | Logout revokes the current refresh token | ❌ no endpoint |
 | FR-A9 | User can reset a forgotten password | ✅ emailed single-use link, 30 min; ends all sessions |
 | FR-A10 | Email ownership is verified before links can be created | ❌ |
+| FR-A12 | After a password reset the user gets an email (time in UTC, link to the forgot-password page, no token) and an in-app notification | ✅ both sent in the background; if RabbitMQ or SMTP is down the message is lost and the reset still succeeds |
 | FR-A11 | Revoke all sessions of a user (password change, compromise) | ⚠️ done on password reset (`urt:<userID>` index); no endpoint of its own; tokens issued before the index existed are not covered |
 
 ### 2.2 Links
@@ -75,6 +76,13 @@ WAF, captcha, payments.
 | FR-ADM8 | Dashboard numbers (totals, per-day series) | ✅ `GET /api/admin/stats`, up to 90 days |
 | FR-ADM9 | Admin web UI | ❌ planned (plan 3, `shorten-link-gui`) |
 
+### 2.4a Notifications
+
+| ID | Requirement | Status |
+|---|---|---|
+| FR-N1 | A signed-in user lists their notifications, newest first, 20 per page (`GET /api/notifications?cursor=`), with the unread count | ✅ API only; created by link disable/enable, the expiry scanner and password resets |
+| FR-N2 | A user marks one notification (`POST /api/notifications/{id}/read`) or all (`/read-all`) read; another user's id answers `404` | ✅ |
+
 ### 2.5 Operations endpoints
 
 | ID | Requirement | Status |
@@ -111,7 +119,7 @@ WAF, captcha, payments.
 | NFR-S7 | Slow-client protection (header/read/write/idle timeouts) | ✅ |
 | NFR-S8 | Secrets come from env/volumes, never committed | ✅ `.env`, `keys/` git-ignored |
 | NFR-S9 | JWT signing key can be rotated without logging everyone out (`kid`) | ❌ |
-| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.9, 0 reachable findings; enforced in CI |
+| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.10, 0 reachable findings; enforced in CI |
 | NFR-S11 | Redis and RabbitMQ require authentication in production | ✅ prod compose refuses to start without `REDIS_PASSWORD` / `RABBITMQ_*` |
 | NFR-S12 | Audit trail for security-relevant actions | ⚠️ every admin action is in `audit_log` (same transaction); logins, password resets and user actions are not |
 

@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ type fakeAdminRepo struct {
 	stats         *service.Stats
 	statsSince    time.Time
 	createdAdmin  *service.User
+	linkUnchanged bool // SetLinkDisabled reports changed == false
 }
 
 func (f *fakeAdminRepo) CreateAdmin(_ context.Context, u *service.User) error {
@@ -71,11 +73,11 @@ func (f *fakeAdminRepo) ListLinks(context.Context, service.LinkFilter) ([]*servi
 	return nil, nil
 }
 func (f *fakeAdminRepo) GetLink(_ context.Context, code string) (*service.AdminLink, error) {
-	return &service.AdminLink{ShortCode: code}, nil
+	return &service.AdminLink{ID: 7, OwnerID: 42, ShortCode: code}, nil
 }
 func (f *fakeAdminRepo) SetLinkDisabled(context.Context, int64, string, bool, string) (bool, error) {
 	f.calls = append(f.calls, "link-disabled")
-	return true, nil
+	return !f.linkUnchanged, nil
 }
 func (f *fakeAdminRepo) DeleteLink(context.Context, int64, string, string) error {
 	f.calls = append(f.calls, "link-delete")
@@ -90,7 +92,7 @@ func (f *fakeAdminRepo) SetRole(_ context.Context, _ int64, email, role string) 
 }
 
 func newAdminSvc(repo *fakeAdminRepo, cache *mockCache, tokens *mockTokenCache) *service.AdminService {
-	return service.NewAdminService(repo, newMockUserRepo(), cache, tokens)
+	return service.NewAdminService(repo, newMockUserRepo(), cache, tokens, service.NoopPublisher{})
 }
 
 func TestDisableUser_Self(t *testing.T) {
@@ -236,7 +238,7 @@ func TestIsActiveAdmin(t *testing.T) {
 	users.users["admin@x.com"] = &service.User{ID: 1, Role: service.RoleAdmin}
 	users.users["user@x.com"] = &service.User{ID: 2, Role: service.RoleUser}
 	users.users["off@x.com"] = &service.User{ID: 3, Role: service.RoleAdmin, DisabledAt: &now}
-	svc := service.NewAdminService(newFakeAdminRepo(), users, newMockCache(), newMockTokenCache())
+	svc := service.NewAdminService(newFakeAdminRepo(), users, newMockCache(), newMockTokenCache(), service.NoopPublisher{})
 
 	for id, want := range map[int64]bool{1: true, 2: false, 3: false, 99: false} {
 		got, err := svc.IsActiveAdmin(context.Background(), id)
@@ -248,7 +250,7 @@ func TestIsActiveAdmin(t *testing.T) {
 
 func TestSetAdmin(t *testing.T) {
 	repo := newFakeAdminRepo()
-	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil)
+	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil, service.NoopPublisher{})
 	if changed, err := svc.SetAdmin(context.Background(), " A@X.com ", true); err != nil || !changed {
 		t.Errorf("want changed, got %v, %v", changed, err)
 	}
@@ -324,7 +326,7 @@ func TestStats_ZeroFillsAndOrders(t *testing.T) {
 
 func TestCreateAdmin_NewUser(t *testing.T) {
 	repo := newFakeAdminRepo()
-	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil)
+	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil, service.NoopPublisher{})
 
 	created, err := svc.CreateAdmin(context.Background(), 42, " Admin@X.com ", "s3cret-pass")
 	if err != nil || !created {
@@ -343,7 +345,7 @@ func TestCreateAdmin_ExistingUserIsGrantedPasswordUnchanged(t *testing.T) {
 	repo := newFakeAdminRepo()
 	users := newMockUserRepo()
 	users.users["u@x.com"] = &service.User{ID: 7, Email: "u@x.com", PasswordHash: "old", Role: service.RoleUser}
-	svc := service.NewAdminService(repo, users, nil, nil)
+	svc := service.NewAdminService(repo, users, nil, nil, service.NoopPublisher{})
 
 	created, err := svc.CreateAdmin(context.Background(), 42, "u@x.com", "") // no password needed
 	if err != nil || created {
@@ -359,7 +361,7 @@ func TestCreateAdmin_ExistingUserIsGrantedPasswordUnchanged(t *testing.T) {
 
 func TestCreateAdmin_WeakPassword(t *testing.T) {
 	repo := newFakeAdminRepo()
-	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil)
+	svc := service.NewAdminService(repo, newMockUserRepo(), nil, nil, service.NoopPublisher{})
 	for _, pw := range []string{"", "short", strings.Repeat("x", 73)} {
 		if _, err := svc.CreateAdmin(context.Background(), 42, "new@x.com", pw); !errors.Is(err, service.ErrWeakPassword) {
 			t.Errorf("password %q: want ErrWeakPassword, got %v", pw, err)
@@ -367,5 +369,106 @@ func TestCreateAdmin_WeakPassword(t *testing.T) {
 	}
 	if repo.createdAdmin != nil {
 		t.Error("user created despite a weak password")
+	}
+}
+
+// chanPub sends every published event on a channel (Publish runs in a goroutine).
+type chanPub struct {
+	ch  chan pubCall
+	err error
+}
+
+type pubCall struct {
+	key     string
+	payload any
+}
+
+func newChanPub(err error) *chanPub {
+	return &chanPub{ch: make(chan pubCall, 10), err: err}
+}
+
+func (p *chanPub) Publish(_ context.Context, key string, payload any) error {
+	p.ch <- pubCall{key, payload}
+	return p.err
+}
+
+func (p *chanPub) next(t *testing.T, wait time.Duration) (pubCall, bool) {
+	t.Helper()
+	select {
+	case c := <-p.ch:
+		return c, true
+	case <-time.After(wait):
+		return pubCall{}, false
+	}
+}
+
+func checkLinkEvent(t *testing.T, p *chanPub, wantKey, wantPrefix string) {
+	t.Helper()
+	c, ok := p.next(t, 2*time.Second)
+	if !ok {
+		t.Fatal("no event published")
+	}
+	if c.key != wantKey {
+		t.Errorf("routing key = %q, want %q", c.key, wantKey)
+	}
+	ev, ok := c.payload.(service.NotificationEvent)
+	if !ok {
+		t.Fatalf("payload type %T", c.payload)
+	}
+	if ev.UserID != 42 || ev.LinkID != 7 || ev.ShortCode != "abc" {
+		t.Errorf("event = %+v", ev)
+	}
+	if !strings.HasPrefix(ev.DedupeKey, wantPrefix) || len(ev.DedupeKey) == len(wantPrefix) {
+		t.Errorf("dedupe key = %q", ev.DedupeKey)
+	}
+	if ev.OccurredAt.IsZero() {
+		t.Error("OccurredAt not set")
+	}
+	b, _ := json.Marshal(c.payload)
+	if strings.Contains(string(b), "secret reason") {
+		t.Errorf("payload leaks reason: %s", b)
+	}
+}
+
+func TestAdminService_DisableLinkPublishes(t *testing.T) {
+	pub := newChanPub(nil)
+	svc := service.NewAdminService(newFakeAdminRepo(), newMockUserRepo(), newMockCache(), newMockTokenCache(), pub)
+	if _, err := svc.DisableLink(context.Background(), 1, "abc", "secret reason"); err != nil {
+		t.Fatal(err)
+	}
+	checkLinkEvent(t, pub, service.RouteLinkDisabled, "disabled:")
+}
+
+func TestAdminService_EnableLinkPublishes(t *testing.T) {
+	pub := newChanPub(nil)
+	svc := service.NewAdminService(newFakeAdminRepo(), newMockUserRepo(), newMockCache(), newMockTokenCache(), pub)
+	if _, err := svc.EnableLink(context.Background(), 1, "abc", "secret reason"); err != nil {
+		t.Fatal(err)
+	}
+	checkLinkEvent(t, pub, service.RouteLinkEnabled, "enabled:")
+}
+
+func TestAdminService_NoEventWhenUnchanged(t *testing.T) {
+	pub := newChanPub(nil)
+	repo := newFakeAdminRepo()
+	repo.linkUnchanged = true
+	svc := service.NewAdminService(repo, newMockUserRepo(), newMockCache(), newMockTokenCache(), pub)
+	if _, err := svc.DisableLink(context.Background(), 1, "abc", ""); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := pub.next(t, 100*time.Millisecond); ok {
+		t.Fatalf("unexpected event %+v", c)
+	}
+}
+
+func TestAdminService_PublishFailureDoesNotFail(t *testing.T) {
+	pub := newChanPub(errors.New("broker down"))
+	svc := service.NewAdminService(newFakeAdminRepo(), newMockUserRepo(), newMockCache(), newMockTokenCache(), pub)
+	l, err := svc.DisableLink(context.Background(), 1, "abc", "")
+	if err != nil || l == nil {
+		t.Fatalf("got %v, %v", l, err)
+	}
+	if _, ok := pub.next(t, 2*time.Second); !ok {
+		t.Fatal("publish not attempted")
 	}
 }

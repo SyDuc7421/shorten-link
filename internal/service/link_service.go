@@ -218,7 +218,8 @@ func (s *LinkService) Delete(ctx context.Context, code string, userID int64) err
 	return nil
 }
 
-// ListByUser returns a cursor-paginated list of links for a user (limit 20).
+// ListByUser returns up to limit links of a user with id > afterID (the
+// handler asks for one row more than a page).
 func (s *LinkService) ListByUser(ctx context.Context, userID int64, afterID int64, limit int) ([]*Link, error) {
 	links, err := s.repo.ListByUser(ctx, userID, afterID, limit)
 	if err != nil {

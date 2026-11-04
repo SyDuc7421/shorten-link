@@ -281,26 +281,50 @@ func TestLinkHandler_List_NoAuth(t *testing.T) {
 	}
 }
 
-func TestLinkHandler_List_NextCursorWhenFull(t *testing.T) {
-	links := make([]*service.Link, 20)
-	for i := range links {
-		links[i] = &service.Link{ID: int64(i + 1), ShortCode: "c", OriginalURL: "https://x.com"}
+// The handler asks for one row more than a page; next_cursor is set only if
+// that extra row exists, so a full last page does not lead to an empty one.
+func TestLinkHandler_List_NextCursorOnlyWhenMore(t *testing.T) {
+	rows := func(n int) []*service.Link {
+		links := make([]*service.Link, n)
+		for i := range links {
+			links[i] = &service.Link{ID: int64(100 - i), ShortCode: "c", OriginalURL: "https://x.com"}
+		}
+		return links
 	}
-	mux := newLinkMux(&mockLinkSvc{
-		listByUserFn: func(_ context.Context, _ int64, _ int64, _ int) ([]*service.Link, error) {
-			return links, nil
-		},
-	})
+	cases := []struct {
+		name       string
+		returned   int
+		wantItems  int
+		wantCursor string
+	}{
+		{"more rows", 21, 20, "81"},
+		{"exactly full last page", 20, 20, ""},
+		{"short page", 3, 3, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotLimit int
+			mux := newLinkMux(&mockLinkSvc{
+				listByUserFn: func(_ context.Context, _ int64, _ int64, limit int) ([]*service.Link, error) {
+					gotLimit = limit
+					return rows(tc.returned), nil
+				},
+			})
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, withUserID(httptest.NewRequest("GET", "/api/links", nil), 1))
 
-	req := withUserID(httptest.NewRequest("GET", "/api/links", nil), 1)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-
-	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp) //nolint:errcheck
-	cursor, _ := resp["next_cursor"].(string)
-	if cursor == "" {
-		t.Error("want non-empty next_cursor when page is full")
+			var resp struct {
+				Links []map[string]any `json:"links"`
+				Next  string           `json:"next_cursor"`
+			}
+			json.NewDecoder(w.Body).Decode(&resp) //nolint:errcheck
+			if gotLimit != 21 {
+				t.Errorf("limit = %d, want 21 (page + 1)", gotLimit)
+			}
+			if len(resp.Links) != tc.wantItems || resp.Next != tc.wantCursor {
+				t.Errorf("items=%d next=%q, want %d %q", len(resp.Links), resp.Next, tc.wantItems, tc.wantCursor)
+			}
+		})
 	}
 }
 
@@ -466,5 +490,21 @@ func TestLinkHandler_Redirect_Disabled(t *testing.T) {
 
 	if w.Code != http.StatusGone || !strings.Contains(w.Body.String(), "link disabled") {
 		t.Errorf("want 410 link disabled, got %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestLinkHandler_List_BadCursor(t *testing.T) {
+	mux := newLinkMux(&mockLinkSvc{
+		listByUserFn: func(context.Context, int64, int64, int) ([]*service.Link, error) {
+			t.Error("service must not be called for a bad cursor")
+			return nil, nil
+		},
+	})
+	for _, c := range []string{"abc", "0", "-5"} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, withUserID(httptest.NewRequest("GET", "/api/links?cursor="+c, nil), 1))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("cursor=%s: got %d, want 400", c, w.Code)
+		}
 	}
 }

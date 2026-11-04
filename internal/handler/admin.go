@@ -121,12 +121,15 @@ func auditJSON(e *service.AuditEntry) map[string]any {
 	}
 }
 
-// nextCursor is the last row's ID when the page is full, "" on the last page.
-func nextCursor(n int, lastID func() int64) string {
-	if n < service.AdminPageSize {
-		return ""
+// trimPage takes up to size+1 rows, newest first. If the extra row is there,
+// an older page exists: it is dropped and the cursor is the last kept row's
+// ID. Otherwise the cursor is "", even when the page is exactly full.
+func trimPage[T any](rows []T, size int, id func(T) int64) ([]T, string) {
+	if len(rows) <= size {
+		return rows, ""
 	}
-	return idString(lastID())
+	rows = rows[:size]
+	return rows, idString(id(rows[size-1]))
 }
 
 // --- input helpers ---
@@ -232,13 +235,14 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, err, "")
 		return
 	}
+	users, next := trimPage(users, service.AdminPageSize, func(x *service.AdminUser) int64 { return x.ID })
 	out := make([]map[string]any, len(users))
 	for i, u := range users {
 		out[i] = adminUserJSON(u, false)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users":       out,
-		"next_cursor": nextCursor(len(users), func() int64 { return users[len(users)-1].ID }),
+		"next_cursor": next,
 	})
 }
 
@@ -329,13 +333,14 @@ func (h *AdminHandler) ListLinks(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, err, "")
 		return
 	}
+	links, next := trimPage(links, service.AdminPageSize, func(x *service.AdminLink) int64 { return x.ID })
 	out := make([]map[string]any, len(links))
 	for i, l := range links {
 		out[i] = h.adminLinkJSON(l)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"links":       out,
-		"next_cursor": nextCursor(len(links), func() int64 { return links[len(links)-1].ID }),
+		"next_cursor": next,
 	})
 }
 
@@ -399,13 +404,14 @@ func (h *AdminHandler) ListAudit(w http.ResponseWriter, r *http.Request) {
 		writeAdminError(w, err, "")
 		return
 	}
+	entries, next := trimPage(entries, service.AdminPageSize, func(x *service.AuditEntry) int64 { return x.ID })
 	out := make([]map[string]any, len(entries))
 	for i, e := range entries {
 		out[i] = auditJSON(e)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"entries":     out,
-		"next_cursor": nextCursor(len(entries), func() int64 { return entries[len(entries)-1].ID }),
+		"next_cursor": next,
 	})
 }
 

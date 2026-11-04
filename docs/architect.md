@@ -42,8 +42,8 @@ There are **two programs**, built from the same codebase:
 
 | Program | What it does | Talks to |
 |---|---|---|
-| **server** (`cmd/server`) | Serves the REST API, the redirects and `/docs` | MySQL, Redis, RabbitMQ (publish only) |
-| **worker** (`cmd/worker`) | Reads click events and adds them to each link's counter | RabbitMQ (consume), MySQL |
+| **server** (`cmd/server`) | Serves the REST API, the redirects and `/docs`; publishes click and notification events, e.g. `user.password_changed` after a password reset | MySQL, Redis, RabbitMQ (publish only), SMTP |
+| **worker** (`cmd/worker`) | Reads click events and adds them to each link's counter; stores notification events in MySQL; scans for expiring links and publishes `link.expiring` | RabbitMQ (consume and publish), MySQL |
 
 And **three backing services**:
 
@@ -179,6 +179,9 @@ Every request passes through these, outermost first:
 | DELETE | `/api/admin/links/{code}` | admin | Delete any link |
 | GET | `/api/admin/audit?actor_id=&resource_type=&cursor=` | admin | Admin action log |
 | GET | `/api/admin/stats?days=` | admin | Totals, per-day new users/links/clicks, top links (1–90 days) |
+| GET | `/api/notifications?cursor=` | ✔ | Your notifications, newest first, 20 per page, plus the unread count |
+| POST | `/api/notifications/{id}/read` | ✔ | Mark one of your notifications read (`404` if it is not yours) |
+| POST | `/api/notifications/read-all` | ✔ | Mark all your notifications read |
 | GET | `/healthz` | — | Pings MySQL, Redis, RabbitMQ |
 | GET | `/docs`, `/api/openapi.yaml` | — | Swagger UI and the raw spec |
 
@@ -191,12 +194,12 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | Package | Responsibility | Read this first |
 |---|---|---|
 | `cmd/server` | Wires everything together, builds the middleware chain, graceful shutdown | `main.go` |
-| `cmd/worker` | Starts the click and DLQ consumers, shuts down cleanly | `main.go` |
+| `cmd/worker` | Starts the click, notification and DLQ consumers, shuts down cleanly | `main.go` |
 | `config` | Reads env vars (`envconfig`), opens MySQL/Redis/RabbitMQ, loads RSA keys | `config.go` |
 | `internal/handler` | HTTP handlers for links, auth, health, docs | `link.go` |
 | `internal/service` | Business logic and the interfaces it depends on | `link_service.go`, `auth_service.go` |
 | `internal/repository` | MySQL (`*_mysql.go`) and Redis (`*_redis.go`) implementations | `link_mysql.go` |
-| `internal/messaging` | RabbitMQ topology, publisher, click and DLQ consumers | `setup.go` |
+| `internal/messaging` | RabbitMQ topology, publisher, click, notification and DLQ consumers | `setup.go` |
 | `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
 | `internal/ctxkey` | Typed context key for the authenticated user ID | — |
@@ -253,6 +256,7 @@ to 3 attempts.
 | `links` | ✔ | id, user_id, short_code (unique), original_url, clicks, expires_at, disabled_at |
 | `analytics_daily` | ✔ | Clicks per link per UTC day, primary key (link_id, stat_date); written by the worker, read by `/api/admin/stats` |
 | `audit_log` | ✔ | One row per admin action (who, what, target, JSON metadata) |
+| `notifications` | ✔ | In-app notifications: user_id, type, link_id, short_code, expires_at, unique dedupe_key, read_at. Written by the worker, read by the API; also holds `password_changed` rows |
 
 ### Redis keys
 
@@ -273,10 +277,12 @@ to 3 attempts.
 
 | Name | Type | Notes |
 |---|---|---|
-| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked` |
+| `shortlink` | topic exchange | server publishes `link.created`, `link.clicked` and, from the admin service, `link.disabled`, `link.enabled`, and from the auth service `user.password_changed`; the worker's expiry scanner publishes `link.expiring` |
 | `clicks` | queue | bound to `link.clicked`; dead-letters to `shortlink.dlx` |
 | `shortlink.dlx` | direct exchange | — |
 | `clicks.dlq` | queue | failed click batches end up here |
+| `notifications` | queue | bound to `link.disabled`, `link.enabled`, `link.expiring`, `user.password_changed`; dead-letters to `shortlink.dlx` with key `notifications.dead` |
+| `notifications.dlq` | queue | malformed or twice-failed notification events end up here; logged by `DLQConsumer` |
 
 `link.created` has no consumer yet; it is published for future use.
 
@@ -290,6 +296,19 @@ to 3 attempts.
 | **MySQL** | work for cached links only | fail | fail | no, retried then DLQ |
 | **RabbitMQ** | work | work | work | **lost** for that period |
 | **worker** | work | work | work | delayed (queue grows) |
+
+Notification events (`link.disabled`, `link.enabled`, `user.password_changed`)
+follow one rule: **RabbitMQ down = notification lost, never a failed request.**
+They are published in the background with a 2s timeout and a failure is only
+logged. A password reset likewise still succeeds, and the notice mail is still
+sent, when the publish fails.
+
+MySQL down while the worker consumes: notification events are retried once,
+then dead-lettered to `notifications.dlq`, where they are only logged. They
+are lost (`link.expiring` is recreated by the next scan).
+
+Known gap: notifications are never deleted. The `notifications` table only
+grows.
 
 `/healthz` returns 503 if any of MySQL, Redis or RabbitMQ is unreachable.
 

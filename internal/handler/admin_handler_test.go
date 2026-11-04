@@ -103,7 +103,7 @@ func TestAdminHandler_ListUsers_StringIDsAndCursor(t *testing.T) {
 	var got service.UserFilter
 	mux := newAdminMux(&mockAdminSvc{listUsersFn: func(_ context.Context, f service.UserFilter) ([]*service.AdminUser, error) {
 		got = f
-		users := make([]*service.AdminUser, service.AdminPageSize)
+		users := make([]*service.AdminUser, service.AdminPageSize+1) // one extra: an older page exists
 		for i := range users {
 			users[i] = &service.AdminUser{ID: bigID - int64(i), Email: "u@x.com", Role: "user"}
 		}
@@ -121,6 +121,9 @@ func TestAdminHandler_ListUsers_StringIDsAndCursor(t *testing.T) {
 		Next  string           `json:"next_cursor"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
+	if len(resp.Users) != service.AdminPageSize {
+		t.Errorf("want %d users (extra row dropped), got %d", service.AdminPageSize, len(resp.Users))
+	}
 	if resp.Users[0]["id"] != "9007199254740993" {
 		t.Errorf("id must be a string, got %#v", resp.Users[0]["id"])
 	}
@@ -149,6 +152,25 @@ func TestAdminHandler_LastPageHasEmptyCursor(t *testing.T) {
 	owner, _ := link["owner"].(map[string]any)
 	if link["short_url"] != "https://short.ly/abc" || owner["id"] != "2" || owner["email"] != "o@x.com" {
 		t.Errorf("link JSON: %v", link)
+	}
+}
+
+func TestAdminHandler_FullLastPageHasEmptyCursor(t *testing.T) {
+	mux := newAdminMux(&mockAdminSvc{listAuditFn: func(_ context.Context, _ service.AuditFilter) ([]*service.AuditEntry, error) {
+		entries := make([]*service.AuditEntry, service.AdminPageSize)
+		for i := range entries {
+			entries[i] = &service.AuditEntry{ID: int64(100 - i)}
+		}
+		return entries, nil
+	}})
+	w := adminDo(mux, "GET", "/api/admin/audit", "")
+	var resp struct {
+		Entries []map[string]any `json:"entries"`
+		Next    string           `json:"next_cursor"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &resp) //nolint:errcheck
+	if len(resp.Entries) != service.AdminPageSize || resp.Next != "" {
+		t.Errorf("entries=%d next=%q, want %d and empty", len(resp.Entries), resp.Next, service.AdminPageSize)
 	}
 }
 

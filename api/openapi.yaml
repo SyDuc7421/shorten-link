@@ -382,7 +382,7 @@ paths:
       parameters:
         - name: cursor
           in: query
-          description: Opaque cursor from `next_cursor` in the previous response.
+          description: The `next_cursor` of the previous response. Must be a positive integer, else 400.
           schema:
             type: string
           example: "1234567890123456789"
@@ -450,6 +450,75 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/notifications:
+    get:
+      summary: List your notifications
+      description: |
+        Newest first, 20 per page. `cursor` is the id of the last item of the
+        previous page; the next page holds older notifications. `next_cursor`
+        is set only when an older page exists, so it is empty on the last
+        page even when that page is full. `unread_count` counts all unread
+        notifications, not just this page.
+      tags: [Notifications]
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+          description: Return notifications older than this id. Must be a positive integer, else 400.
+      responses:
+        "200":
+          description: One page of notifications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Notification"
+                  next_cursor: { type: string, example: "12" }
+                  unread_count: { type: integer, format: int64, example: 3 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/notifications/{id}/read:
+    post:
+      summary: Mark one notification read
+      description: Answers 404 for a missing id and for another user's notification.
+      tags: [Notifications]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Marked read (also when it was already read)
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/notifications/read-all:
+    post:
+      summary: Mark all your notifications read
+      tags: [Notifications]
+      responses:
+        "204":
+          description: All marked read
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1098,6 +1167,27 @@ components:
           type: string
           enum: [invalid, reserved, taken]
           description: Present only when `available` is false.
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, example: "12" }
+        type:
+          type: string
+          enum: [link_disabled, link_enabled, link_expiring, password_changed]
+        link_id:
+          type: string
+          nullable: true
+          description: Null for `password_changed`.
+          example: "734000000000000001"
+        code:
+          type: string
+          nullable: true
+          description: Short code of the link; null for `password_changed`.
+          example: "abc"
+        expires_at: { type: string, format: date-time, nullable: true, description: "Only for `link_expiring`." }
+        read_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
 
     Error:
       type: object

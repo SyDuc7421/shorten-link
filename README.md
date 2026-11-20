@@ -59,7 +59,7 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    ```
 
    The RabbitMQ management UI is at http://localhost:15672. Log in with
-   `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env` (`guest` / `guest` if unset).
+   `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`.
 
 6. To use the admin API (`/api/admin/*`), set `ADMIN_EMAIL` and
    `ADMIN_PASSWORD` in `.env`, then:
@@ -72,11 +72,13 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
 
 ### RabbitMQ credentials
 
-The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`,
-defaulting to `guest` / `guest` only when they are unset. `.env.example` has
-always set `shortlink` / `changeme_rabbit`, so an existing `.env` copied from it
-already has a user, and RabbitMQ will create that user, not `guest`, whenever
-it starts with an empty data volume. If your `.env` still has
+The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`.
+Both are required: `docker compose` stops with `set RABBITMQ_USER` if either is
+missing, as the production compose file does. There is no `guest` fallback, so
+no password is written into the compose files. `.env.example` has always set
+`shortlink` / `changeme_rabbit`, so an existing `.env` copied from it already
+has a user, and RabbitMQ creates that user whenever it starts with an empty
+data volume. If your `.env` still has
 `RABBITMQ_URL=amqp://guest:guest@localhost:5672/`, change it to
 `amqp://<RABBITMQ_USER>:<RABBITMQ_PASSWORD>@localhost:5672/` so the URL uses
 the same user and password. Then recreate RabbitMQ. The `-V` matters: the image

@@ -96,7 +96,7 @@ All ports bind `127.0.0.1` only.
 | Grafana | <http://localhost:3000> | `admin` / `GRAFANA_ADMIN_PASSWORD` from `.env` (default `admin`). Anonymous access and sign-up are off |
 | Prometheus | <http://localhost:9090> | none (targets: Status → Targets; rules: Alerts) |
 | Alertmanager | <http://localhost:9093> | none |
-| RabbitMQ management | <http://localhost:15672> | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env` (`guest` / `guest` if unset) |
+| RabbitMQ management | <http://localhost:15672> | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env` (required) |
 | Server API | <http://localhost:8080> | |
 
 Loki, Alloy, cAdvisor, the exporters and the app metrics ports are not

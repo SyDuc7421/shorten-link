@@ -7,7 +7,7 @@ x-app-env: &app-env
   MYSQL_HOST: mysql
   MYSQL_PORT: "3306"
   REDIS_ADDR: redis:6379
-  RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:?set RABBITMQ_USER}:${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}@rabbitmq:5672/
   JWT_PRIVATE_KEY_PATH: /keys/private.pem
   JWT_PUBLIC_KEY_PATH: /keys/public.pem
   METRICS_PORT: "9100"
@@ -50,16 +50,16 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     environment:
-      # The broker user comes from RABBITMQ_USER/RABBITMQ_PASSWORD (guest/guest only if unset).
+      # The broker user comes from RABBITMQ_USER/RABBITMQ_PASSWORD in .env (required).
       # Keep RABBITMQ_URL in .env on the same user/password, or make run cannot connect.
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD}
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
     volumes:
       - ./deploy/observability/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
-      # local only: the default guest user may connect from other containers
+      # local only: a guest user (RABBITMQ_USER=guest) may connect from other containers
       - ./deploy/observability/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-local.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]

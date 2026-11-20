@@ -12,6 +12,9 @@ type Config struct {
 	BaseURL        string `envconfig:"BASE_URL" default:"http://localhost:8080"`
 	AllowedOrigins string `envconfig:"ALLOWED_ORIGINS" default:""` // comma-separated, empty = deny all CORS
 
+	// MetricsPort serves /metrics on a separate listener. 0 = off.
+	MetricsPort int `envconfig:"METRICS_PORT" default:"0"`
+
 	// NodeID must be unique per server instance (0-1023) or short codes can collide.
 	NodeID int64 `envconfig:"NODE_ID" default:"1"`
 

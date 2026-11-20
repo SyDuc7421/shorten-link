@@ -19,6 +19,7 @@ variable, which is better than failing on the first request.
 | `PORT` | `8080` | | HTTP port of the server |
 | `BASE_URL` | `http://localhost:8080` | | Prefix for `short_url` in responses |
 | `ALLOWED_ORIGINS` | empty | | Comma-separated origins allowed by CORS. Empty = none |
+| `METRICS_PORT` | `0` | | Port of the separate Prometheus `/metrics` listener, used by both server and worker. `0` = off. If the port cannot be bound, the program exits. See [metrics.md](metrics.md) |
 | `NODE_ID` | `1` | | Snowflake node ID, 0–1023. **Must differ per server instance** |
 | `MYSQL_HOST`, `MYSQL_PORT` | `localhost`, `3306` | | |
 | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB` | | ✔ | |

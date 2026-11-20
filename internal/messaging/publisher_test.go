@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	amqp "github.com/rabbitmq/amqp091-go"
 	tcrabbit "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 	"go.uber.org/zap"
+
+	"github.com/april/shorten-link/internal/metrics"
 )
 
 // setupRabbit starts a broker and returns it with a dial func that re-reads the
@@ -138,4 +141,37 @@ func TestPublisher_StartsWhileBrokerUnavailable(t *testing.T) {
 
 	eventually(t, 10*time.Second, "publish after broker becomes reachable", func() error { return publishClick(p, "late-start") })
 	requireDelivered(t, dial, "late-start")
+}
+
+func TestPublish_NotConnectedCountsError(t *testing.T) {
+	reconnectDelay = time.Hour
+	p := NewPublisher(func() (*amqp.Connection, error) { return nil, errors.New("refused") }, zap.NewNop())
+	defer p.Close()
+
+	c := metrics.Publishes.WithLabelValues("link.clicked", "error")
+	before := testutil.ToFloat64(c)
+	start := time.Now()
+	if err := publishClick(p, "x"); err == nil {
+		t.Fatal("want error when not connected")
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Error("publish must fail fast")
+	}
+	if d := testutil.ToFloat64(c) - before; d != 1 {
+		t.Errorf("publish error delta = %v, want 1", d)
+	}
+}
+
+func TestPublish_SuccessCountsOK(t *testing.T) {
+	reconnectDelay = 200 * time.Millisecond
+	_, dial := setupRabbit(t)
+	p := NewPublisher(dial, zap.NewNop())
+	defer p.Close()
+
+	ok := metrics.Publishes.WithLabelValues("link.clicked", "ok")
+	before := testutil.ToFloat64(ok)
+	eventually(t, 10*time.Second, "publish", func() error { return publishClick(p, "metric") })
+	if d := testutil.ToFloat64(ok) - before; d != 1 {
+		t.Errorf("publish ok delta = %v, want 1", d)
+	}
 }

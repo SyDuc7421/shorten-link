@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -177,5 +179,43 @@ func TestNotificationConsumer_ExpiringInsertFailureIsDroppedNotDLQ(t *testing.T)
 	}
 	if second.acked != 1 || len(second.requeue) != 0 {
 		t.Errorf("redelivered: want ack (dropped, scanner retries), got acked=%d nacks=%v", second.acked, second.requeue)
+	}
+}
+
+func TestNotificationConsumer_Metrics(t *testing.T) {
+	good := `{"dedupe_key":"password:m","user_id":1}`
+	cases := []struct {
+		name        string
+		err         error
+		body        string
+		redelivered bool
+		want        string
+	}{
+		{"ok insert", nil, good, false, "ack"},
+		{"malformed", nil, `{`, false, "dlq"},
+		{"failing insert first try", errors.New("db"), good, false, "nack"},
+		{"failing insert redelivered", errors.New("db"), good, true, "dlq"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			counters := map[string]float64{}
+			for _, r := range []string{"ack", "nack", "dlq"} {
+				counters[r] = testutil.ToFloat64(metrics.WorkerMessages.WithLabelValues(QueueNotifications, r))
+			}
+			newTestNotifConsumer(&fakeNotifRepo{err: tc.err}).handle(context.Background(), amqp.Delivery{
+				Acknowledger: &fakeAck{}, Body: []byte(tc.body),
+				RoutingKey: service.RoutePasswordChanged, Redelivered: tc.redelivered,
+			})
+			for _, r := range []string{"ack", "nack", "dlq"} {
+				d := testutil.ToFloat64(metrics.WorkerMessages.WithLabelValues(QueueNotifications, r)) - counters[r]
+				want := 0.0
+				if r == tc.want {
+					want = 1
+				}
+				if d != want {
+					t.Errorf("%s delta = %v, want %v", r, d, want)
+				}
+			}
+		})
 	}
 }

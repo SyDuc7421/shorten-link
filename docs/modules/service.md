@@ -363,6 +363,8 @@ returns an error only when the repository query fails.
 
 `Run(ctx, interval)` scans once right away, then on every tick, until `ctx` is
 cancelled, and returns nil. A scan error is logged and the loop keeps going.
+After each scan, `Run` adds `shortlink_worker_expiry_scan_total{result}` and,
+on success, sets the last-success timestamp gauge.
 Known gap: if more than 500 links qualify, the rest wait for later scans.
 
 ## Before you change it

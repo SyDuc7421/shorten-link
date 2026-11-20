@@ -33,7 +33,9 @@ through RabbitMQ and MySQL.
    `EXPIRY_SCAN_INTERVAL` (default 5 minutes) it publishes `link.expiring` for
    links that expire within 24 hours; see
    [service.md](service.md#expiry-scanner-expiry_scannergo). A broker outage
-   only makes publishes fail and be retried on the next scan.
+   only makes publishes fail and be retried on the next scan. Each scan adds
+   `shortlink_worker_expiry_scan_total{result=ok|error}`, and a successful one
+   sets `shortlink_worker_expiry_scan_last_success_timestamp_seconds`.
 6. Wait in `waitForShutdown`.
 
 ## Shutdown and failure

@@ -8,6 +8,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -69,6 +70,7 @@ func (c *ClickConsumer) Start(ctx context.Context) error {
 			if err := json.Unmarshal(d.Body, &evt); err != nil || evt.Code == "" {
 				c.log.Warn("invalid click event, discarding", zap.ByteString("body", d.Body))
 				d.Nack(false, false) //nolint:errcheck
+				metrics.WorkerMessages.WithLabelValues(QueueClicks, "dlq").Inc()
 				continue
 			}
 			batch.add(d, evt.Code)
@@ -106,20 +108,38 @@ func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log
 	if len(b.counts) == 0 {
 		return
 	}
-	if err := repo.BatchUpdateClicks(ctx, b.counts); err != nil {
+	metrics.ClickBatchSize.Observe(float64(len(b.pending)))
+	start := time.Now()
+	err := repo.BatchUpdateClicks(ctx, b.counts)
+	metrics.ClickFlushDuration.Observe(time.Since(start).Seconds())
+	if err != nil {
 		log.Error("batch update clicks", zap.Error(err))
+		metrics.ClickFlushes.WithLabelValues("error").Inc()
 		// Retry once; a message that already failed is dead-lettered so a
 		// persistent DB error cannot loop the same batch forever.
 		for _, d := range b.pending {
 			d.Nack(false, !d.Redelivered) //nolint:errcheck
+			metrics.WorkerMessages.WithLabelValues(QueueClicks, nackResult(d)).Inc()
 		}
 	} else {
+		metrics.ClickFlushes.WithLabelValues("ok").Inc()
 		for _, d := range b.pending {
 			d.Ack(false) //nolint:errcheck
 		}
+		metrics.WorkerMessages.WithLabelValues(QueueClicks, "ack").Add(float64(len(b.pending)))
 	}
 	b.counts = make(map[string]int64, batchSize)
 	b.pending = b.pending[:0]
+}
+
+// nackResult is the worker_messages result for a delivery nacked with
+// requeue=!d.Redelivered: "nack" when it goes back to the queue, "dlq" when
+// it is dead-lettered.
+func nackResult(d amqp.Delivery) string {
+	if d.Redelivered {
+		return "dlq"
+	}
+	return "nack"
 }
 
 // DLQConsumer logs dead-letter messages and acknowledges them.

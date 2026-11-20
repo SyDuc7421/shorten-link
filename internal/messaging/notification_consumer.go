@@ -7,6 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -93,12 +94,15 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 		// adding a copy to the DLQ every scan.
 		if d.Redelivered && typ == service.NotificationLinkExpiring {
 			d.Ack(false) //nolint:errcheck
+			metrics.WorkerMessages.WithLabelValues(QueueNotifications, "ack").Inc()
 			return
 		}
 		d.Nack(false, !d.Redelivered) //nolint:errcheck
+		metrics.WorkerMessages.WithLabelValues(QueueNotifications, nackResult(d)).Inc()
 		return
 	}
 	d.Ack(false) //nolint:errcheck
+	metrics.WorkerMessages.WithLabelValues(QueueNotifications, "ack").Inc()
 }
 
 func (c *NotificationConsumer) reject(d amqp.Delivery, reason string) {
@@ -108,4 +112,5 @@ func (c *NotificationConsumer) reject(d amqp.Delivery, reason string) {
 		zap.ByteString("body", d.Body),
 	)
 	d.Nack(false, false) //nolint:errcheck
+	metrics.WorkerMessages.WithLabelValues(QueueNotifications, "dlq").Inc()
 }

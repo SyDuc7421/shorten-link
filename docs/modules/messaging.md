@@ -73,6 +73,11 @@ error), `Publish` reopens the channel once and retries.
 
 `IsClosed()` reports whether there is a live connection. `/healthz` uses it.
 
+**Metrics.** Every `Publish` call adds exactly one
+`shortlink_rabbitmq_publish_total{routing_key,result}`, with `result` `ok` or
+`error`, on every return path (marshal error, not connected, retry failure,
+success).
+
 **What is not guaranteed.** Clicks published while disconnected are lost: the
 service ignores publish errors on purpose. Publisher confirms are not enabled
 either, so a message in flight when the broker crashes can be lost. Click
@@ -102,6 +107,15 @@ messages at a time, which matches the batch size.
 
 When the context is cancelled (shutdown) or the channel closes, the consumer
 flushes what it has before returning, so nothing already received is lost.
+
+**Metrics.** `shortlink_worker_messages_total{queue,result}` counts every
+settled delivery: `ack`; `nack` (requeued for one retry); `dlq` (nacked
+without requeue, so dead-lettered, including invalid events and messages that
+already failed once). A non-empty flush also records
+`shortlink_worker_click_batch_size`, `shortlink_worker_click_flush_duration_seconds`
+and `shortlink_worker_click_flush_total{result=ok|error}`. An empty flush
+records nothing. The notification consumer uses the same result values with
+`queue="notifications"` (a dropped `link.expiring` retry counts as `ack`).
 
 ### `DLQConsumer`
 

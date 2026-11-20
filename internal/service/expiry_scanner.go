@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/april/shorten-link/internal/metrics"
 )
 
 const expiryScanLimit = 500
@@ -67,8 +69,13 @@ func (s *ExpiryScanner) Run(ctx context.Context, interval time.Duration) error {
 		n, err := s.ScanOnce(ctx, time.Now().UTC())
 		if err != nil {
 			s.log.Error("expiry scan failed", zap.Error(err))
-		} else if n > 0 {
-			s.log.Info("expiry scan published events", zap.Int("count", n))
+			metrics.ExpiryScans.WithLabelValues("error").Inc()
+		} else {
+			metrics.ExpiryScans.WithLabelValues("ok").Inc()
+			metrics.ExpiryScanLastSuccess.Set(float64(time.Now().Unix()))
+			if n > 0 {
+				s.log.Info("expiry scan published events", zap.Int("count", n))
+			}
 		}
 		select {
 		case <-ctx.Done():

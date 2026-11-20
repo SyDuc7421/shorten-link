@@ -10,6 +10,8 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
+
+	"github.com/april/shorten-link/internal/metrics"
 )
 
 // reconnectDelay is the pause between reconnect attempts.
@@ -110,6 +112,16 @@ func (p *Publisher) openChannel() error {
 // Publish serialises payload as JSON and publishes it to the shortlink exchange.
 // If the channel has been closed it attempts to reopen once before returning an error.
 func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any) error {
+	err := p.publish(ctx, routingKey, payload)
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	metrics.Publishes.WithLabelValues(routingKey, result).Inc()
+	return err
+}
+
+func (p *Publisher) publish(ctx context.Context, routingKey string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("publisher: marshal: %w", err)

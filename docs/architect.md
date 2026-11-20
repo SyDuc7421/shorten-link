@@ -225,7 +225,7 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
 | `internal/metrics` | Prometheus registry, metric definitions, `/metrics` listener on `METRICS_PORT` | `metrics.go` |
-| `internal/ctxkey` | Typed context key for the authenticated user ID | — |
+| `internal/ctxkey` | Typed context keys for the authenticated user ID and the request ID | — |
 | `internal/logger` | zap logger, stored in and read from the request context | — |
 | `pkg/idgen` | Snowflake ID generator + Base62 encoder (IDs become short codes) | `idgen.go` |
 | `api` | Embedded `openapi.yaml` | — |

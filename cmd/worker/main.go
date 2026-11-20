@@ -34,7 +34,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := metrics.Serve(ctx, cfg.MetricsPort, log); err != nil {
+	_, err = metrics.Serve(ctx, cfg.MetricsPort, log)
+	if err != nil {
 		log.Fatal("failed to start metrics listener", zap.Error(err))
 	}
 
@@ -95,7 +96,7 @@ func main() {
 	// running if a publish fails; the next scan retries.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
-	metrics.RegisterPublisherConnected(func() bool { return !pub.IsClosed() })
+	metrics.RegisterPublisherConnected(pub.Connected)
 	scanner := service.NewExpiryScanner(repository.NewNotificationMySQL(db), pub, log)
 
 	errc := make(chan error, 5)

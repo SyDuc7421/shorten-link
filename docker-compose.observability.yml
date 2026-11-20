@@ -28,6 +28,7 @@ services:
       - "127.0.0.1:9093:9093"
     volumes:
       - ./deploy/observability/alertmanager:/etc/alertmanager:ro
+      - alertmanager_data:/alertmanager
     restart: unless-stopped
 
   loki:
@@ -126,6 +127,7 @@ services:
       - ./deploy/observability/k6:/scripts:ro
 
 volumes:
+  alertmanager_data:
   prometheus_data:
   loki_data:
   grafana_data:

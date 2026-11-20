@@ -75,7 +75,9 @@ func Middleware(next http.Handler) http.Handler {
 // values are populated by the mux inside next.
 func RecordRoute(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h, ok := r.Context().Value(holderKey{}).(*routeHolder); ok {
+		// CONNECT is skipped: for a trailing-slash redirect ServeMux returns the
+		// raw request path as the "pattern", which would be a free-form label.
+		if h, ok := r.Context().Value(holderKey{}).(*routeHolder); ok && r.Method != http.MethodConnect {
 			if _, pattern := mux.Handler(r); pattern != "" {
 				h.pattern.Store(&pattern)
 			}

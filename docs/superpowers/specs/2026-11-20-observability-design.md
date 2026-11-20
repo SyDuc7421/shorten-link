@@ -201,8 +201,8 @@ Names follow Prometheus conventions, namespace `shortlink_`.
 
 - Apps keep writing zap JSON to stdout. No logging library change.
 - Alloy: `discovery.docker` + `loki.source.docker` via the read-only Docker
-  socket, then `loki.process` with a `stage.json` that extracts `level`, `msg`,
-  `request_id`, `status`, `method`.
+  socket, then `loki.process` with a `stage.json` that extracts `level` and
+  `request_id` (the other fields stay in the line and are reached with `| json`).
 - **Loki labels (low cardinality only):** `service` (compose service name),
   `container`, `level`, `env` (`local`/`prod`). `request_id`, `path`,
   `user_id`, `status` stay in the log line / structured metadata, queried with

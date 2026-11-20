@@ -94,15 +94,15 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 		// adding a copy to the DLQ every scan.
 		if d.Redelivered && typ == service.NotificationLinkExpiring {
 			d.Ack(false) //nolint:errcheck
-			metrics.WorkerMessages.WithLabelValues(QueueNotifications, "ack").Inc()
+			metrics.WorkerMessage(QueueNotifications, "ack", 1)
 			return
 		}
 		d.Nack(false, !d.Redelivered) //nolint:errcheck
-		metrics.WorkerMessages.WithLabelValues(QueueNotifications, nackResult(d)).Inc()
+		metrics.WorkerMessage(QueueNotifications, nackResult(d), 1)
 		return
 	}
 	d.Ack(false) //nolint:errcheck
-	metrics.WorkerMessages.WithLabelValues(QueueNotifications, "ack").Inc()
+	metrics.WorkerMessage(QueueNotifications, "ack", 1)
 	c.log.Info("notification stored", zap.String("routing_key", d.RoutingKey), ridField(requestIDOf(d)))
 }
 
@@ -114,5 +114,5 @@ func (c *NotificationConsumer) reject(d amqp.Delivery, reason string) {
 		zap.ByteString("body", d.Body),
 	)
 	d.Nack(false, false) //nolint:errcheck
-	metrics.WorkerMessages.WithLabelValues(QueueNotifications, "dlq").Inc()
+	metrics.WorkerMessage(QueueNotifications, "dlq", 1)
 }

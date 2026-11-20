@@ -162,9 +162,8 @@ plan with a daily quota of 100, and a token pair is issued.
 
 **Metrics.** `Login` is a thin wrapper that counts the result in
 `shortlink_auth_logins_total{result}`: `ok`, `locked` (`ErrAccountLocked`) or
-`fail` (`ErrInvalidCredentials`, `ErrAccountDisabled`). Infrastructure errors
-(Redis or MySQL down) are not counted, since they say nothing about the
-credentials.
+`fail` (`ErrInvalidCredentials`, `ErrAccountDisabled`). Any other error (Redis
+or MySQL down) is counted as `error`, so it does not look like a wrong password.
 
 **Why the dummy hash?** Without it, a login for an unknown email would return
 almost instantly, while a real email would take ~0.25 s for bcrypt. That

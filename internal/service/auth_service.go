@@ -141,11 +141,13 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*Token
 	pair, err := s.login(ctx, email, password)
 	switch {
 	case err == nil:
-		metrics.Logins.WithLabelValues("ok").Inc()
+		metrics.Login("ok")
 	case errors.Is(err, ErrAccountLocked):
-		metrics.Logins.WithLabelValues("locked").Inc()
+		metrics.Login("locked")
 	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrAccountDisabled):
-		metrics.Logins.WithLabelValues("fail").Inc()
+		metrics.Login("fail")
+	default:
+		metrics.Login("error") // Redis or MySQL failed, not the credentials
 	}
 	return pair, err
 }

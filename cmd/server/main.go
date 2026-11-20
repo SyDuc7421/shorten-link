@@ -66,7 +66,7 @@ func main() {
 	// redirects while RabbitMQ is down, and the publisher reconnects on its own.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
-	metrics.RegisterPublisherConnected(func() bool { return !pub.IsClosed() })
+	metrics.RegisterPublisherConnected(pub.Connected)
 
 	// RSA keys for JWT
 	privateKey, publicKey, err := cfg.LoadRSAKeys()
@@ -158,7 +158,8 @@ func main() {
 
 	metricsCtx, stopMetrics := context.WithCancel(ctx)
 	defer stopMetrics()
-	if err := metrics.Serve(metricsCtx, cfg.MetricsPort, log); err != nil {
+	metricsStopped, err := metrics.Serve(metricsCtx, cfg.MetricsPort, log)
+	if err != nil {
 		log.Fatal("failed to start metrics listener", zap.Error(err))
 	}
 
@@ -180,6 +181,7 @@ func main() {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
 	stopMetrics()
+	<-metricsStopped
 	log.Info("stopped")
 }
 

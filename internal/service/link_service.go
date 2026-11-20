@@ -127,7 +127,7 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias s
 
 	s.publishAsync(ctx, "link.created", map[string]any{"code": code, "user_id": userID})
 
-	metrics.LinksCreated.Inc()
+	metrics.LinkCreated()
 	return link, nil
 }
 
@@ -170,16 +170,16 @@ func aliasProblem(alias string) string {
 // Resolve returns the original URL for a short code.
 // Redis-first; falls back to MySQL on miss. Click event is published async.
 func (s *LinkService) Resolve(ctx context.Context, code string) (_ string, err error) {
-	defer func() { metrics.Redirects.WithLabelValues(redirectOutcome(err)).Inc() }()
+	defer func() { metrics.Redirect(redirectOutcome(err)) }()
 
 	rawURL, cacheErr := s.cache.Get(ctx, code)
 	switch {
 	case cacheErr == nil:
-		metrics.CacheRequests.WithLabelValues("hit").Inc()
+		metrics.CacheHit()
 	case errors.Is(cacheErr, ErrNotFound):
-		metrics.CacheRequests.WithLabelValues("miss").Inc()
+		metrics.CacheMiss()
 	default:
-		metrics.CacheRequests.WithLabelValues("error").Inc()
+		metrics.CacheError()
 	}
 	if cacheErr == nil {
 		if rawURL == disabledMarker {

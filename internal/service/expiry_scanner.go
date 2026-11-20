@@ -69,10 +69,9 @@ func (s *ExpiryScanner) Run(ctx context.Context, interval time.Duration) error {
 		n, err := s.ScanOnce(ctx, time.Now().UTC())
 		if err != nil {
 			s.log.Error("expiry scan failed", zap.Error(err))
-			metrics.ExpiryScans.WithLabelValues("error").Inc()
+			metrics.ExpiryScan(false, time.Now())
 		} else {
-			metrics.ExpiryScans.WithLabelValues("ok").Inc()
-			metrics.ExpiryScanLastSuccess.Set(float64(time.Now().Unix()))
+			metrics.ExpiryScan(true, time.Now())
 			if n > 0 {
 				s.log.Info("expiry scan published events", zap.Int("count", n))
 			}

@@ -52,7 +52,7 @@ func RateLimit(rdb *redis.Client, action string, limit int, window time.Duration
 			).Int()
 			// Fail open: a Redis outage must not take down redirects.
 			if err == nil && allowed == 0 {
-				metrics.RateLimited.WithLabelValues(action).Inc()
+				metrics.RateLimitRejected(action)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Retry-After", retryAfter)
 				w.WriteHeader(http.StatusTooManyRequests)

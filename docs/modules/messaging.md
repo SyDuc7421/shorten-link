@@ -72,6 +72,8 @@ If publishing on a channel fails (channels can close on their own after an
 error), `Publish` reopens the channel once and retries.
 
 `IsClosed()` reports whether there is a live connection. `/healthz` uses it.
+`Connected()` is the same idea from an atomic flag set by `connect` and the
+reconnect loop; it never takes the lock, so the metrics gauge uses it.
 
 **Request ID.** `newPublishing(ctx, body)` builds the message. If the context
 carries a request ID (`ctxkey.RequestID`) it is sent as the `x-request-id`

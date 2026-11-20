@@ -80,7 +80,7 @@ directory name; check with `docker volume ls`):
 
 ```bash
 make observe-down
-docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data
+docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data shorten-link_alertmanager_data
 make observe
 ```
 
@@ -132,10 +132,10 @@ a process never updates still appears: plain counters/gauges/histograms show
 | `shortlink_link_cache_requests_total` | counter | `result`: `hit`, `miss`, `error` | server | Redis cache lookups on redirect |
 | `shortlink_redirects_total` | counter | `outcome`: `found`, `not_found`, `disabled`, `error` | server | Result of resolving a short code. Expired links count as `not_found` |
 | `shortlink_links_created_total` | counter | | server | Links created |
-| `shortlink_auth_logins_total` | counter | `result`: `ok`, `fail`, `locked` | server | Login attempts |
+| `shortlink_auth_logins_total` | counter | `result`: `ok`, `fail`, `locked`, `error` | server | Login attempts. `error` means Redis or MySQL failed during the attempt, not the credentials |
 | `shortlink_ratelimit_rejected_total` | counter | `action` | server | Requests rejected by the per-IP rate limiter. `action` is one of `redirect`, `create`, `login`, `register`, `refresh`, `forgot-password`, `reset-password`, `alias-check` |
 | `shortlink_rabbitmq_publish_total` | counter | `routing_key`, `result`: `ok`, `error` | server, worker | Event publishes. Routing keys: `link.created`, `link.clicked`, `link.disabled`, `link.enabled`, `user.password_changed` (server), `link.expiring` (worker) |
-| `shortlink_rabbitmq_publisher_connected` | gauge | | server, worker | `1` while the publisher has an open RabbitMQ channel, else `0` |
+| `shortlink_rabbitmq_publisher_connected` | gauge | | server, worker | `1` while the publisher has a live RabbitMQ connection, else `0`. Read from a flag, so a scrape never waits on a publish |
 | `shortlink_worker_messages_total` | counter | `queue`: `clicks`, `notifications`; `result`: `ack`, `nack`, `dlq` | worker | Consumed messages. `nack` = requeued for one retry; `dlq` = rejected without requeue (already redelivered, or an invalid click event) |
 | `shortlink_worker_click_batch_size` | histogram | | worker | Click events per flush |
 | `shortlink_worker_click_flush_duration_seconds` | histogram | | worker | Time to write one click batch to MySQL |

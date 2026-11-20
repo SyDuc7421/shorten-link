@@ -70,7 +70,7 @@ func (c *ClickConsumer) Start(ctx context.Context) error {
 			if err := json.Unmarshal(d.Body, &evt); err != nil || evt.Code == "" {
 				c.log.Warn("invalid click event, discarding", zap.ByteString("body", d.Body))
 				d.Nack(false, false) //nolint:errcheck
-				metrics.WorkerMessages.WithLabelValues(QueueClicks, "dlq").Inc()
+				metrics.WorkerMessage(QueueClicks, "dlq", 1)
 				continue
 			}
 			batch.add(d, evt.Code)
@@ -108,25 +108,23 @@ func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log
 	if len(b.counts) == 0 {
 		return
 	}
-	metrics.ClickBatchSize.Observe(float64(len(b.pending)))
 	start := time.Now()
 	err := repo.BatchUpdateClicks(ctx, b.counts)
-	metrics.ClickFlushDuration.Observe(time.Since(start).Seconds())
+	flushDur := time.Since(start)
+	metrics.ClickFlush(len(b.pending), flushDur, err == nil)
 	if err != nil {
 		log.Error("batch update clicks", zap.Error(err), zap.Strings("request_ids", b.requestIDs()))
-		metrics.ClickFlushes.WithLabelValues("error").Inc()
 		// Retry once; a message that already failed is dead-lettered so a
 		// persistent DB error cannot loop the same batch forever.
 		for _, d := range b.pending {
 			d.Nack(false, !d.Redelivered) //nolint:errcheck
-			metrics.WorkerMessages.WithLabelValues(QueueClicks, nackResult(d)).Inc()
+			metrics.WorkerMessage(QueueClicks, nackResult(d), 1)
 		}
 	} else {
-		metrics.ClickFlushes.WithLabelValues("ok").Inc()
 		for _, d := range b.pending {
 			d.Ack(false) //nolint:errcheck
 		}
-		metrics.WorkerMessages.WithLabelValues(QueueClicks, "ack").Add(float64(len(b.pending)))
+		metrics.WorkerMessage(QueueClicks, "ack", len(b.pending))
 	}
 	b.counts = make(map[string]int64, batchSize)
 	b.pending = b.pending[:0]

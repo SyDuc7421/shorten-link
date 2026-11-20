@@ -988,3 +988,21 @@ func TestLogin_MetricsByResult(t *testing.T) {
 		}
 	})
 }
+
+// failingLockoutCache makes the first Redis call of a login fail.
+type failingLockoutCache struct{ *mockTokenCache }
+
+func (failingLockoutCache) GetLockout(context.Context, string) (int64, error) {
+	return 0, errors.New("redis down")
+}
+
+func TestLogin_InfrastructureErrorCountedAsError(t *testing.T) {
+	svc := newAuthSvc(t, newMockUserRepo(), failingLockoutCache{newMockTokenCache()})
+	before := testutil.ToFloat64(metrics.Logins.WithLabelValues("error"))
+	if _, err := svc.Login(context.Background(), "a@b.com", "secret123"); err == nil {
+		t.Fatal("want error")
+	}
+	if d := testutil.ToFloat64(metrics.Logins.WithLabelValues("error")) - before; d != 1 {
+		t.Errorf("error delta = %v, want 1", d)
+	}
+}

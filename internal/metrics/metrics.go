@@ -40,7 +40,7 @@ var (
 	})
 	Logins = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "shortlink_auth_logins_total",
-		Help: "Login attempts by result (ok, fail, locked).",
+		Help: "Login attempts by result (ok, fail, locked, error).",
 	}, []string{"result"})
 	RateLimited = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "shortlink_ratelimit_rejected_total",

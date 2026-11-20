@@ -162,3 +162,20 @@ func TestMiddleware_PanicCountedAs500(t *testing.T) {
 		t.Fatalf("delta = %v, want 1", d)
 	}
 }
+
+// CONNECT to a subtree path without its trailing slash makes ServeMux return
+// the raw path as the pattern; it must be counted as "unmatched", not as a new label.
+func TestMiddleware_ConnectIsUnmatched(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/files/", func(http.ResponseWriter, *http.Request) {})
+	h := metrics.Middleware(metrics.RecordRoute(mux, mux))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodConnect, "/files", nil))
+
+	if got := count("OTHER", "unmatched", rec.Code); got < 1 {
+		t.Fatalf("CONNECT /files: unmatched count = %v (status %d), want >= 1", got, rec.Code)
+	}
+	if got := count("OTHER", "/files", rec.Code); got != 0 {
+		t.Fatalf("raw path leaked into the route label: %v", got)
+	}
+}

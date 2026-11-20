@@ -123,7 +123,7 @@ make load            # 5 min of mixed traffic through k6 (needs make observe run
 ```
 
 For empty metrics, logs and Grafana state, run `make observe-down`, then
-`docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data`,
+`docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data shorten-link_alertmanager_data`,
 then `make observe`. Do not use `down -v`: it also deletes `mysql_data`, your local database.
 
 `make load` runs `deploy/observability/k6/load.js` in a `grafana/k6` container on

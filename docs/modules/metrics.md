@@ -4,8 +4,10 @@
 worker export, and serves them on `/metrics` from a separate port.
 
 **Where it sits.** `cmd/server` and `cmd/worker` call `metrics.Serve` at start-up.
-Other packages (middleware, handlers, messaging) import this package and update
-the exported variables. Nothing here imports the rest of the app. The HTTP
+Other packages (`middleware`, `service`, `messaging`) import this package and
+update metrics through the small functions in `helpers.go` (`CacheHit()`,
+`Login("ok")`, ...), so they pass no label strings or Prometheus types by hand
+(the exported variables stay for tests). Nothing here imports the rest of the app. The HTTP
 metrics are updated here, by the middleware in `http.go`; the others are updated
 by `service`, `middleware` (rate limit) and `messaging`. What each metric means,
 and the dashboards and alerts built on them, are in
@@ -18,9 +20,11 @@ and the dashboards and alerts built on them, are in
 - `Serve(ctx, port, log)` does nothing when `port` is `0` (the default). Otherwise
   it binds `:port` immediately, so a clash is returned as an error and the caller
   should exit. It serves `GET /metrics` in the background and shuts down (5s
-  grace) when `ctx` is cancelled.
+  grace) when `ctx` is cancelled. It also returns a channel that is closed when
+  that shutdown has finished; `cmd/server` waits on it before exiting.
 - `RegisterPublisherConnected(fn)` adds the gauge `shortlink_rabbitmq_publisher_connected`
-  (1/0). Call it once per process.
+  (1/0). Call it once per process. Both commands pass `Publisher.Connected`,
+  which reads an atomic flag, so a scrape never waits on the publisher's lock.
 - `Middleware(next)` is the outermost HTTP wrapper in `cmd/server`. It puts a
   route holder in the request context, records the status (default 200), and
   after the request updates `HTTPRequests`, `HTTPDuration` and `HTTPInFlight`.
@@ -32,7 +36,9 @@ and the dashboards and alerts built on them, are in
   before anything else runs, so a request cut off by `TimeoutHandler` or
   rejected early (429, 413) still has its route. The mux is never served from
   here, so `r.PathValue` is populated by the mux inside `next`. The holder is atomic because `TimeoutHandler`
-  runs the inner handler in another goroutine. No pattern means `route="unmatched"`.
+  runs the inner handler in another goroutine. No pattern means `route="unmatched"`. CONNECT requests are
+  never given a pattern, because for them `ServeMux` can return the raw request
+  path as the pattern.
 - Updating a metric never blocks and never returns an error.
 
 ## Metrics
@@ -45,7 +51,7 @@ and the dashboards and alerts built on them, are in
 | `CacheRequests` | counter | `shortlink_link_cache_requests_total` | result: hit, miss, error |
 | `Redirects` | counter | `shortlink_redirects_total` | outcome: found, not_found, disabled, error |
 | `LinksCreated` | counter | `shortlink_links_created_total` | |
-| `Logins` | counter | `shortlink_auth_logins_total` | result: ok, fail, locked |
+| `Logins` | counter | `shortlink_auth_logins_total` | result: ok, fail, locked, error |
 | `RateLimited` | counter | `shortlink_ratelimit_rejected_total` | action |
 | `Publishes` | counter | `shortlink_rabbitmq_publish_total` | routing_key, result: ok, error |
 | `WorkerMessages` | counter | `shortlink_worker_messages_total` | queue, result: ack, nack, dlq |
@@ -60,7 +66,8 @@ and the dashboards and alerts built on them, are in
 
 1. Declare it as an exported `var` in `metrics.go` with the `shortlink_` prefix.
 2. Add it to the `MustRegister` call in `init()`.
-3. Add a row to the table above.
+3. Add a helper function in `helpers.go` for callers.
+4. Add a row to the table above.
 
 ## Why it is built this way
 

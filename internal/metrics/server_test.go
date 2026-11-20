@@ -26,7 +26,7 @@ func freePort(t *testing.T) int {
 }
 
 func TestServe_ZeroPortDisabled(t *testing.T) {
-	if err := metrics.Serve(context.Background(), 0, zap.NewNop()); err != nil {
+	if _, err := metrics.Serve(context.Background(), 0, zap.NewNop()); err != nil {
 		t.Fatalf("Serve(0) = %v, want nil", err)
 	}
 }
@@ -35,7 +35,7 @@ func TestServe_ExposesMetrics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	port := freePort(t)
-	if err := metrics.Serve(ctx, port, zap.NewNop()); err != nil {
+	if _, err := metrics.Serve(ctx, port, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
@@ -61,7 +61,7 @@ func TestServe_PortInUseErrors(t *testing.T) {
 	}
 	defer l.Close()
 	port := l.Addr().(*net.TCPAddr).Port
-	if err := metrics.Serve(context.Background(), port, zap.NewNop()); err == nil {
+	if _, err := metrics.Serve(context.Background(), port, zap.NewNop()); err == nil {
 		t.Fatal("expected bind error")
 	}
 }
@@ -69,7 +69,7 @@ func TestServe_PortInUseErrors(t *testing.T) {
 func TestServe_StopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	port := freePort(t)
-	if err := metrics.Serve(ctx, port, zap.NewNop()); err != nil {
+	if _, err := metrics.Serve(ctx, port, zap.NewNop()); err != nil {
 		t.Fatal(err)
 	}
 	cancel()

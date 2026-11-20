@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -29,6 +30,10 @@ type Publisher struct {
 	log  *zap.Logger
 
 	reconnectDelay time.Duration // copied from the package default at construction
+
+	// connected mirrors "conn is live" without p.mu, so a metrics scrape never
+	// waits behind a Publish that holds the lock during network I/O.
+	connected atomic.Bool
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -64,6 +69,7 @@ func (p *Publisher) connect() error {
 	p.mu.Lock()
 	p.conn, p.ch = conn, ch
 	p.mu.Unlock()
+	p.connected.Store(true)
 	return nil
 }
 
@@ -73,10 +79,13 @@ func (p *Publisher) reconnectLoop() {
 		conn := p.conn
 		p.mu.Unlock()
 
-		if conn != nil && !conn.IsClosed() {
+		if conn == nil || conn.IsClosed() {
+			p.connected.Store(false)
+		} else {
 			closed := conn.NotifyClose(make(chan *amqp.Error, 1))
 			select {
 			case err := <-closed: // nil on a clean close
+				p.connected.Store(false)
 				p.log.Warn("rabbitmq connection lost", zap.Error(err))
 			case <-p.done:
 				return
@@ -102,6 +111,10 @@ func (p *Publisher) IsClosed() bool {
 	defer p.mu.Unlock()
 	return p.conn == nil || p.conn.IsClosed()
 }
+
+// Connected reports whether the publisher had a live connection at the last
+// connect or drop. It never blocks, so metrics use it instead of IsClosed.
+func (p *Publisher) Connected() bool { return p.connected.Load() }
 
 func (p *Publisher) openChannel() error {
 	ch, err := p.conn.Channel()
@@ -151,7 +164,7 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any)
 	if err != nil {
 		result = "error"
 	}
-	metrics.Publishes.WithLabelValues(routingKey, result).Inc()
+	metrics.Publish(routingKey, result)
 	return err
 }
 
@@ -184,6 +197,7 @@ func (p *Publisher) publish(ctx context.Context, routingKey string, payload any)
 // Close stops reconnecting and closes the connection.
 func (p *Publisher) Close() error {
 	p.closeOnce.Do(func() { close(p.done) })
+	p.connected.Store(false)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.conn == nil {

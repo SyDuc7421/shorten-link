@@ -10,6 +10,11 @@ apply to many routes, so individual handlers stay focused on their own job.
 
 ## The middlewares
 
+The HTTP metrics middleware (`metrics.Middleware` and `metrics.RecordRoute`)
+lives in [`internal/metrics`](metrics.md), not here. It is the outermost layer,
+outside `TimeoutHandler`, so a request cut off by the 10 s timeout is counted
+as `503` with its real route.
+
 ### `JWTAuth` and `RequireAuth` (`auth.go`)
 
 Authentication is split into two steps on purpose:

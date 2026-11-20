@@ -20,6 +20,7 @@ import (
 	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/internal/mail"
 	"github.com/april/shorten-link/internal/messaging"
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
@@ -65,6 +66,7 @@ func main() {
 	// redirects while RabbitMQ is down, and the publisher reconnects on its own.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
+	metrics.RegisterPublisherConnected(func() bool { return !pub.IsClosed() })
 
 	// RSA keys for JWT
 	privateKey, publicKey, err := cfg.LoadRSAKeys()
@@ -125,13 +127,15 @@ func main() {
 	notificationHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
 
-	root := withRateLimits(mux, rdb)
+	root := withRateLimits(metrics.RecordRoute(mux), rdb)
 
 	// Middleware chain (outermost → innermost):
-	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
+	// Metrics → TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
 	// AccessLog and Recover sit inside RequestID so their lines carry request_id,
 	// and AccessLog wraps Recover so a recovered panic is logged with status 500.
-	chain := http.TimeoutHandler(
+	// Metrics is outermost so a request cut off by TimeoutHandler counts as 503;
+	// RecordRoute (inside root) reports the matched mux pattern back to it.
+	chain := metrics.Middleware(http.TimeoutHandler(
 		middleware.SecureHeaders(
 			middleware.CORS(allowedOrigins)(
 				middleware.JWTAuth(authSvc)(
@@ -147,9 +151,15 @@ func main() {
 		),
 		10*time.Second,
 		`{"error":"request timeout"}`,
-	)
+	))
 
 	srv := newServer(cfg.Port, chain)
+
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	if err := metrics.Serve(metricsCtx, cfg.MetricsPort, log); err != nil {
+		log.Fatal("failed to start metrics listener", zap.Error(err))
+	}
 
 	go func() {
 		log.Info("server starting", zap.Int("port", cfg.Port))
@@ -163,6 +173,7 @@ func main() {
 	<-quit
 
 	log.Info("shutting down")
+	stopMetrics()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {

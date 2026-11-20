@@ -12,6 +12,7 @@ import (
 	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/internal/messaging"
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
 )
@@ -32,6 +33,10 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	if err := metrics.Serve(ctx, cfg.MetricsPort, log); err != nil {
+		log.Fatal("failed to start metrics listener", zap.Error(err))
+	}
 
 	db, err := cfg.OpenMySQL(ctx)
 	if err != nil {
@@ -90,6 +95,7 @@ func main() {
 	// running if a publish fails; the next scan retries.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
+	metrics.RegisterPublisherConnected(func() bool { return !pub.IsClosed() })
 	scanner := service.NewExpiryScanner(repository.NewNotificationMySQL(db), pub, log)
 
 	errc := make(chan error, 5)

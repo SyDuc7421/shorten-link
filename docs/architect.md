@@ -140,10 +140,11 @@ where they are implemented. That is why tests can swap in simple mocks.
 
 ### Middleware chain
 
-Every request passes through these, outermost first:
+Every request passes through these, outermost first. `metrics.RecordRoute` also wraps the mux, innermost, to tell step 0 which route pattern matched:
 
 | # | Middleware | Purpose |
 |---|---|---|
+| 0 | `metrics.Middleware` | Count and time every request by method, route pattern and status (`/metrics`); outermost so a timed-out request counts as 503 |
 | 1 | `http.TimeoutHandler` | Abort any request that takes longer than 10s |
 | 2 | `SecureHeaders` | HSTS, CSP, X-Frame-Options, nosniff, etc. |
 | 3 | `CORS` | Allow only origins listed in `ALLOWED_ORIGINS` |

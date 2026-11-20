@@ -13,7 +13,9 @@ through RabbitMQ and MySQL.
 
 ## What happens when it runs
 
-1. Load config and create the logger (exit 1 on failure).
+1. Load config and create the logger (exit 1 on failure). Then start the
+   `/metrics` listener if `METRICS_PORT` is not `0` (fatal if the port cannot
+   be bound).
 2. Connect to MySQL and RabbitMQ. **Both are required**: unlike the server, the
    worker has nothing useful to do without them, so it exits and lets Docker
    restart it.
@@ -25,7 +27,8 @@ through RabbitMQ and MySQL.
    dead-lettering are in
    [messaging.md](messaging.md#the-consumers-consumergo).
 5. Create a publisher (`messaging.NewPublisher`, which reconnects on its own)
-   and start the `ExpiryScanner` in a fifth goroutine. Every
+   (its connection state feeds `shortlink_rabbitmq_publisher_connected`) and
+   start the `ExpiryScanner` in a fifth goroutine. Every
    `EXPIRY_SCAN_INTERVAL` (default 5 minutes) it publishes `link.expiring` for
    links that expire within 24 hours; see
    [service.md](service.md#expiry-scanner-expiry_scannergo). A broker outage

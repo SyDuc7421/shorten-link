@@ -5,9 +5,9 @@ worker export, and serves them on `/metrics` from a separate port.
 
 **Where it sits.** `cmd/server` and `cmd/worker` call `metrics.Serve` at start-up.
 Other packages (middleware, handlers, messaging) import this package and update
-the exported variables. Nothing here imports the rest of the app. At the moment
-only the registry and listener exist; the code that updates the metrics is added
-by later changes, so most series stay at zero until then.
+the exported variables. Nothing here imports the rest of the app. The HTTP
+metrics are updated here, by the middleware in `http.go`; the other series stay
+at zero until later changes update them.
 
 ## How it works
 
@@ -19,6 +19,17 @@ by later changes, so most series stay at zero until then.
   grace) when `ctx` is cancelled.
 - `RegisterPublisherConnected(fn)` adds the gauge `shortlink_rabbitmq_publisher_connected`
   (1/0). Call it once per process.
+- `Middleware(next)` is the outermost HTTP wrapper in `cmd/server`. It puts a
+  route holder in the request context, records the status (default 200), and
+  after the request updates `HTTPRequests`, `HTTPDuration` and `HTTPInFlight`.
+  `method` is the request method if it is GET, POST, PUT, PATCH, DELETE, HEAD or
+  OPTIONS, otherwise `OTHER`.
+- `RecordRoute(mux)` is the innermost wrapper. It reads the matched pattern with
+  `mux.Handler(r)` and stores it in the holder before the handler runs, so a
+  request cut off by `TimeoutHandler` still has its route. It then serves with
+  `mux.ServeHTTP` (not the handler `mux.Handler` returns), otherwise
+  `r.PathValue` would be empty. The holder is atomic because `TimeoutHandler`
+  runs the inner handler in another goroutine. No pattern means `route="unmatched"`.
 - Updating a metric never blocks and never returns an error.
 
 ## Metrics

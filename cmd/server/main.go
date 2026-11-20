@@ -127,16 +127,17 @@ func main() {
 	notificationHandler.Register(mux, middleware.RequireAuth)
 	handler.RegisterDocs(mux)
 
-	root := withRateLimits(metrics.RecordRoute(mux), rdb)
+	root := withRateLimits(mux, rdb)
 
 	// Middleware chain (outermost → innermost):
 	// Metrics → TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
 	// AccessLog and Recover sit inside RequestID so their lines carry request_id,
 	// and AccessLog wraps Recover so a recovered panic is logged with status 500.
 	// Metrics is outermost so a request cut off by TimeoutHandler counts as 503;
-	// RecordRoute (inside root) reports the matched mux pattern back to it.
+	// RecordRoute sits just inside TimeoutHandler and reports the matched mux
+	// pattern back to it, so 413, CORS and 429 responses still carry their route.
 	chain := metrics.Middleware(http.TimeoutHandler(
-		middleware.SecureHeaders(
+		metrics.RecordRoute(mux, middleware.SecureHeaders(
 			middleware.CORS(allowedOrigins)(
 				middleware.JWTAuth(authSvc)(
 					middleware.RequestID(log)(
@@ -148,7 +149,7 @@ func main() {
 					),
 				),
 			),
-		),
+		)),
 		10*time.Second,
 		`{"error":"request timeout"}`,
 	))
@@ -173,12 +174,12 @@ func main() {
 	<-quit
 
 	log.Info("shutting down")
-	stopMetrics()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
+	stopMetrics()
 	log.Info("stopped")
 }
 

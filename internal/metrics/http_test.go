@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/april/shorten-link/internal/metrics"
+	"github.com/april/shorten-link/internal/middleware"
 )
 
 func count(method, route string, status int) float64 {
@@ -35,7 +36,7 @@ func do(h http.Handler, method, path string) *httptest.ResponseRecorder {
 }
 
 func TestMiddleware_RouteIsPatternNotPath(t *testing.T) {
-	h := metrics.Middleware(metrics.RecordRoute(newMux()))
+	h := metrics.Middleware(metrics.RecordRoute(newMux(), newMux()))
 	before := count("GET", "GET /{code}", 404)
 	series := testutil.CollectAndCount(metrics.HTTPRequests)
 
@@ -51,7 +52,7 @@ func TestMiddleware_RouteIsPatternNotPath(t *testing.T) {
 }
 
 func TestMiddleware_Unmatched(t *testing.T) {
-	h := metrics.Middleware(metrics.RecordRoute(newMux()))
+	h := metrics.Middleware(metrics.RecordRoute(newMux(), newMux()))
 	b404 := count("DELETE", "unmatched", 404)
 	b405 := count("DELETE", "unmatched", 405)
 	rec := do(h, "DELETE", "/nope/deep")
@@ -69,7 +70,7 @@ func TestMiddleware_TimeoutCountedAs503(t *testing.T) {
 	mux.HandleFunc("GET /{code}", func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 	})
-	h := metrics.Middleware(http.TimeoutHandler(metrics.RecordRoute(mux), 50*time.Millisecond, "x"))
+	h := metrics.Middleware(http.TimeoutHandler(metrics.RecordRoute(mux, mux), 50*time.Millisecond, "x"))
 	before := count("GET", "GET /{code}", 503)
 	do(h, "GET", "/slow")
 	if d := count("GET", "GET /{code}", 503) - before; d != 1 {
@@ -80,7 +81,8 @@ func TestMiddleware_TimeoutCountedAs503(t *testing.T) {
 
 func TestMiddleware_RequestThroughWithContext(t *testing.T) {
 	type key struct{}
-	inner := metrics.RecordRoute(newMux())
+	mux := newMux()
+	inner := metrics.RecordRoute(mux, mux)
 	ctxMW := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		inner.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), key{}, 1)))
 	})
@@ -97,7 +99,7 @@ func TestMiddleware_DefaultStatus200(t *testing.T) {
 	mux.HandleFunc("GET /ok", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("hi"))
 	})
-	h := metrics.Middleware(metrics.RecordRoute(mux))
+	h := metrics.Middleware(metrics.RecordRoute(mux, mux))
 	before := count("GET", "GET /ok", 200)
 	do(h, "GET", "/ok")
 	if d := count("GET", "GET /ok", 200) - before; d != 1 {
@@ -106,7 +108,7 @@ func TestMiddleware_DefaultStatus200(t *testing.T) {
 }
 
 func TestMiddleware_InFlightReturnsToZero(t *testing.T) {
-	h := metrics.Middleware(metrics.RecordRoute(newMux()))
+	h := metrics.Middleware(metrics.RecordRoute(newMux(), newMux()))
 	before := testutil.ToFloat64(metrics.HTTPInFlight)
 	do(h, "GET", "/abc")
 	if got := testutil.ToFloat64(metrics.HTTPInFlight); got != before {
@@ -115,7 +117,7 @@ func TestMiddleware_InFlightReturnsToZero(t *testing.T) {
 }
 
 func TestMiddleware_UnknownMethodIsOther(t *testing.T) {
-	h := metrics.Middleware(metrics.RecordRoute(newMux()))
+	h := metrics.Middleware(metrics.RecordRoute(newMux(), newMux()))
 	before404 := count("OTHER", "unmatched", 404)
 	before405 := count("OTHER", "unmatched", 405)
 	do(h, "BREW", "/abc")
@@ -130,8 +132,33 @@ func TestRecordRoute_PathValueStillWorks(t *testing.T) {
 	mux.HandleFunc("GET /{code}", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(r.PathValue("code")))
 	})
-	rec := do(metrics.Middleware(metrics.RecordRoute(mux)), "GET", "/abc")
+	rec := do(metrics.Middleware(metrics.RecordRoute(mux, mux)), "GET", "/abc")
 	if rec.Body.String() != "abc" {
 		t.Fatalf("body = %q, want abc", rec.Body.String())
+	}
+}
+
+func TestMiddleware_RateLimited429HasRoute(t *testing.T) {
+	limited := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests) // like RateLimit: never reaches the mux
+	})
+	h := metrics.Middleware(metrics.RecordRoute(newMux(), limited))
+	before := count("GET", "GET /{code}", 429)
+	do(h, "GET", "/abc")
+	if d := count("GET", "GET /{code}", 429) - before; d != 1 {
+		t.Fatalf("delta = %v, want 1", d)
+	}
+}
+
+func TestMiddleware_PanicCountedAs500(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{code}", func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	})
+	h := metrics.Middleware(metrics.RecordRoute(mux, middleware.Recover(mux)))
+	before := count("GET", "GET /{code}", 500)
+	do(h, "GET", "/abc")
+	if d := count("GET", "GET /{code}", 500) - before; d != 1 {
+		t.Fatalf("delta = %v, want 1", d)
 	}
 }

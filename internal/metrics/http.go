@@ -67,18 +67,20 @@ func Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// RecordRoute is the innermost wrapper around the mux. It reads the matched
-// pattern into the holder before the handler runs, so a request cut off by
-// TimeoutHandler still has its route. It then serves through mux.ServeHTTP
-// (not the handler mux.Handler returns) so path values are populated.
-func RecordRoute(mux *http.ServeMux) http.Handler {
+// RecordRoute sits just inside TimeoutHandler. It reads the pattern mux would
+// match into the holder, then calls next (the rest of the chain, ending in mux).
+// The holder is filled before anything else runs, so requests cut off by
+// TimeoutHandler or rejected before the mux (429, 413, CORS) still have their
+// route. mux is only asked for the pattern, never served directly, so path
+// values are populated by the mux inside next.
+func RecordRoute(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h, ok := r.Context().Value(holderKey{}).(*routeHolder); ok {
 			if _, pattern := mux.Handler(r); pattern != "" {
 				h.pattern.Store(&pattern)
 			}
 		}
-		mux.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
 

@@ -4,10 +4,11 @@
 events from RabbitMQ and adds them to each link's `clicks` column in MySQL. It
 also reads notification events and stores them in the `notifications` table.
 It also **publishes**: a timer scans for links about to expire and publishes
-`link.expiring` events. It has no HTTP server.
+`link.expiring` events. It has no public HTTP server; only an optional `/metrics` listener (`METRICS_PORT`).
 
 **Where it sits.** It uses `config`, `internal/messaging`,
-`internal/repository` and `internal/service` (for the expiry scanner).
+`internal/repository`, `internal/service` (for the expiry scanner) and
+`internal/metrics` (the `/metrics` listener).
 Nothing imports it. The server and the worker share no memory; they only meet
 through RabbitMQ and MySQL.
 

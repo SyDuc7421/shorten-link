@@ -24,11 +24,12 @@ at zero until later changes update them.
   after the request updates `HTTPRequests`, `HTTPDuration` and `HTTPInFlight`.
   `method` is the request method if it is GET, POST, PUT, PATCH, DELETE, HEAD or
   OPTIONS, otherwise `OTHER`.
-- `RecordRoute(mux)` is the innermost wrapper. It reads the matched pattern with
-  `mux.Handler(r)` and stores it in the holder before the handler runs, so a
-  request cut off by `TimeoutHandler` still has its route. It then serves with
-  `mux.ServeHTTP` (not the handler `mux.Handler` returns), otherwise
-  `r.PathValue` would be empty. The holder is atomic because `TimeoutHandler`
+- `RecordRoute(mux, next)` sits just inside `TimeoutHandler`. It reads the
+  pattern `mux` would match with `mux.Handler(r)`, stores it in the holder, then
+  calls `next` (the rest of the chain, ending in the mux). The holder is filled
+  before anything else runs, so a request cut off by `TimeoutHandler` or
+  rejected early (429, 413) still has its route. The mux is never served from
+  here, so `r.PathValue` is populated by the mux inside `next`. The holder is atomic because `TimeoutHandler`
   runs the inner handler in another goroutine. No pattern means `route="unmatched"`.
 - Updating a metric never blocks and never returns an error.
 

@@ -140,7 +140,7 @@ where they are implemented. That is why tests can swap in simple mocks.
 
 ### Middleware chain
 
-Every request passes through these, outermost first. `metrics.RecordRoute` also wraps the mux, innermost, to tell step 0 which route pattern matched:
+Every request passes through these, outermost first. `metrics.RecordRoute` sits between steps 1 and 2 and tells step 0 which route pattern matched, so 413, CORS and 429 responses keep their route:
 
 | # | Middleware | Purpose |
 |---|---|---|

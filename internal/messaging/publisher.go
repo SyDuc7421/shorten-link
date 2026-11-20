@@ -28,6 +28,8 @@ type Publisher struct {
 	ch   *amqp.Channel
 	log  *zap.Logger
 
+	reconnectDelay time.Duration // copied from the package default at construction
+
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -35,7 +37,7 @@ type Publisher struct {
 // NewPublisher connects using dial. It does not fail if the broker is
 // unreachable; it keeps retrying in the background instead.
 func NewPublisher(dial func() (*amqp.Connection, error), log *zap.Logger) *Publisher {
-	p := &Publisher{dial: dial, log: log, done: make(chan struct{})}
+	p := &Publisher{dial: dial, log: log, reconnectDelay: reconnectDelay, done: make(chan struct{})}
 	if err := p.connect(); err != nil {
 		log.Warn("rabbitmq unavailable, will retry", zap.Error(err))
 	}
@@ -82,7 +84,7 @@ func (p *Publisher) reconnectLoop() {
 		}
 
 		select {
-		case <-time.After(reconnectDelay):
+		case <-time.After(p.reconnectDelay):
 		case <-p.done:
 			return
 		}

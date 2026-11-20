@@ -37,6 +37,16 @@ func setupRabbit(t *testing.T) (*tcrabbit.RabbitMQContainer, func() (*amqp.Conne
 	return c, dial
 }
 
+// setReconnectDelay overrides the package default for one test and restores it
+// afterwards. Publishers copy the value at construction, so their loops never
+// read the global.
+func setReconnectDelay(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := reconnectDelay
+	reconnectDelay = d
+	t.Cleanup(func() { reconnectDelay = old })
+}
+
 // eventually retries f until it returns nil or the timeout passes.
 func eventually(t *testing.T, timeout time.Duration, what string, f func() error) {
 	t.Helper()
@@ -86,7 +96,7 @@ func publishClick(p *Publisher, code string) error {
 }
 
 func TestPublisher_RecoversFromBrokerRestart(t *testing.T) {
-	reconnectDelay = 200 * time.Millisecond
+	setReconnectDelay(t, 200*time.Millisecond)
 	c, dial := setupRabbit(t)
 	ctx := context.Background()
 
@@ -119,7 +129,7 @@ func TestPublisher_RecoversFromBrokerRestart(t *testing.T) {
 }
 
 func TestPublisher_StartsWhileBrokerUnavailable(t *testing.T) {
-	reconnectDelay = 200 * time.Millisecond
+	setReconnectDelay(t, 200*time.Millisecond)
 	_, dial := setupRabbit(t)
 
 	var attempts atomic.Int32
@@ -144,7 +154,7 @@ func TestPublisher_StartsWhileBrokerUnavailable(t *testing.T) {
 }
 
 func TestPublish_NotConnectedCountsError(t *testing.T) {
-	reconnectDelay = time.Hour
+	setReconnectDelay(t, time.Hour)
 	p := NewPublisher(func() (*amqp.Connection, error) { return nil, errors.New("refused") }, zap.NewNop())
 	defer p.Close()
 
@@ -163,7 +173,7 @@ func TestPublish_NotConnectedCountsError(t *testing.T) {
 }
 
 func TestPublish_SuccessCountsOK(t *testing.T) {
-	reconnectDelay = 200 * time.Millisecond
+	setReconnectDelay(t, 200*time.Millisecond)
 	_, dial := setupRabbit(t)
 	p := NewPublisher(dial, zap.NewNop())
 	defer p.Close()

@@ -54,10 +54,10 @@ creation must keep working when the click pipeline is down. Click counting is
 Every request passes through these layers, outermost first:
 
 ```
-metrics.Middleware                  → counts and times the request (method, route pattern, status)
-  http.TimeoutHandler (10 s)        → 503 {"error":"request timeout"} if a handler is too slow
-    metrics.RecordRoute             → stores the matched mux pattern for metrics.Middleware
-    SecureHeaders                     → security headers on every response
+metrics.Middleware                      → counts and times the request (method, route pattern, status)
+  http.TimeoutHandler (10 s)            → 503 {"error":"request timeout"} if a handler is too slow
+    metrics.RecordRoute                 → stores the matched mux pattern for metrics.Middleware
+      SecureHeaders                     → security headers on every response
         CORS                            → answers preflight, adds CORS headers for allowed origins
           JWTAuth                       → if a valid Bearer token is present, puts the user ID in the context
             RequestID                   → X-Request-ID header + request-scoped logger

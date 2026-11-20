@@ -76,11 +76,12 @@ The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`,
 defaulting to `guest` / `guest`, so an existing `.env` keeps working.
 `.env.example` now sets `shortlink` / `changeme_rabbit` and a matching
 `RABBITMQ_URL`. If you set or change them, recreate RabbitMQ and update
-`RABBITMQ_URL` in your `.env` to match (the user is only created on first start
-of an empty data directory, so recreate with a fresh container):
+`RABBITMQ_URL` in your `.env` to match. The `-V` matters: the image keeps its
+data in an anonymous volume, and RabbitMQ only creates the default user when
+that volume is empty, so a plain `--force-recreate` keeps the old user.
 
 ```bash
-docker compose up -d --force-recreate rabbitmq
+docker compose up -d --force-recreate -V rabbitmq
 ```
 
 ### Run the app in containers
@@ -98,7 +99,7 @@ docker compose --profile app down        # stop (keeps the data volumes)
 
 The containers run as uid 65532, so `keys/private.pem` must be readable by it
 (on Linux: `chmod 640` and `chown :65532`, as in the deploy steps below; Docker
-Desktop and OrbStack usually work as-is). Both containers serve Prometheus
+Desktop and OrbStack usually work as-is). Inside the containers `METRICS_PORT` is always 9100, whatever `.env` says. Both serve Prometheus
 metrics on port 9100 inside the compose network; it is not published to the host.
 
 ### Tests

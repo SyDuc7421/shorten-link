@@ -14,7 +14,7 @@ x-app-env: &app-env
 
 services:
   mysql:
-    image: mysql:8
+    image: mysql:8.4
     env_file:
       - .env
     environment:
@@ -33,7 +33,7 @@ services:
       retries: 30
 
   redis:
-    image: redis:7
+    image: redis:7.4-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # empty REDIS_PASSWORD = no auth

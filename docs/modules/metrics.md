@@ -6,7 +6,7 @@ worker export, and serves them on `/metrics` from a separate port.
 **Where it sits.** `cmd/server` and `cmd/worker` call `metrics.Serve` at start-up.
 Other packages (`middleware`, `service`, `messaging`) import this package and
 update metrics through the small functions in `helpers.go` (`CacheHit()`,
-`Login("ok")`, ...), so they pass no label strings or Prometheus types by hand
+`Login("ok")`, ...), so they pass no Prometheus types
 (the exported variables stay for tests). Nothing here imports the rest of the app. The HTTP
 metrics are updated here, by the middleware in `http.go`; the others are updated
 by `service`, `middleware` (rate limit) and `messaging`. What each metric means,
@@ -21,7 +21,12 @@ and the dashboards and alerts built on them, are in
   it binds `:port` immediately, so a clash is returned as an error and the caller
   should exit. It serves `GET /metrics` in the background and shuts down (5s
   grace) when `ctx` is cancelled. It also returns a channel that is closed when
-  that shutdown has finished; `cmd/server` waits on it before exiting.
+  that shutdown has finished; `cmd/server` and `cmd/worker` wait on it before
+  exiting.
+- `init()` also creates every `WorkerMessages` series (queues `clicks` and
+  `notifications` × `ack`, `nack`, `dlq`) at 0, so `increase()` in the
+  `DeadLettered` alert sees the first dead-letter. Add a queue there when the
+  worker consumes a new one.
 - `RegisterPublisherConnected(fn)` adds the gauge `shortlink_rabbitmq_publisher_connected`
   (1/0). Call it once per process. Both commands pass `Publisher.Connected`,
   which reads an atomic flag, so a scrape never waits on the publisher's lock.

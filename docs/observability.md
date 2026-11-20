@@ -74,7 +74,7 @@ expected and does not fail the run.
 
 ### Fresh observability state
 
-To start with empty metrics, logs and Grafana state, remove only the three
+To start with empty metrics, logs and Grafana state, remove only the four
 stack volumes (names are prefixed with the compose project name, usually the
 directory name; check with `docker volume ls`):
 
@@ -121,7 +121,10 @@ Prometheus scrapes every 15s and evaluates rules every 15s.
 Both `server` and `worker` register the same full set of metrics on their own
 registry, plus Go runtime (`go_*`) and process (`process_*`) metrics. A metric
 a process never updates still appears: plain counters/gauges/histograms show
-`0`, labelled ones show no series until first use. So always filter by `job`
+`0`, labelled ones show no series until first use. The one exception is
+`shortlink_worker_messages_total`: every `queue` (`clicks`, `notifications`) ×
+`result` (`ack`, `nack`, `dlq`) series is created at start-up, so
+`increase()` sees the first dead-letter. So always filter by `job`
 (`job="server"` or `job="worker"`) when the process matters; the dashboards do.
 
 | Name | Type | Labels | Updated by | Meaning |
@@ -312,7 +315,9 @@ Notes:
   → worker, not spans or per-hop timing. OpenTelemetry/Tempo is the next round.
 - **Handlers and services do not log with the request logger** (NFR-OB1), so
   only the access log line and worker consumer lines carry `request_id`.
-- **No metric for DLQ consumption**; use queue depth from RabbitMQ.
+- **The DLQ consumers do not count what they consume.** Dead-lettering is
+  counted where the message is nacked (`shortlink_worker_messages_total{result="dlq"}`,
+  used by `DeadLettered`); DLQ depth comes from RabbitMQ.
 - `make observe-check` validates syntax only; it is not run in CI.
 
 ## 8. Manual acceptance checklist

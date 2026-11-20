@@ -34,7 +34,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = metrics.Serve(ctx, cfg.MetricsPort, log)
+	metricsStopped, err := metrics.Serve(ctx, cfg.MetricsPort, log)
 	if err != nil {
 		log.Fatal("failed to start metrics listener", zap.Error(err))
 	}
@@ -129,7 +129,9 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if waitForShutdown(log, quit, errc, cancel, 5) {
+	failed := waitForShutdown(log, quit, errc, cancel, 5)
+	<-metricsStopped // ctx is cancelled by now; Serve's own shutdown is capped at 5s
+	if failed {
 		log.Error("worker stopped after consumer failure")
 		log.Sync() //nolint:errcheck // os.Exit skips deferred Sync
 		os.Exit(1)

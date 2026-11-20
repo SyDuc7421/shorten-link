@@ -88,6 +88,17 @@ func init() {
 		Publishes, WorkerMessages, ClickBatchSize, ClickFlushDuration,
 		ClickFlushes, ExpiryScans, ExpiryScanLastSuccess,
 	)
+
+	// Create every worker series up front. A series that first appears at 1
+	// makes increase() return 0, so the DeadLettered alert would miss the first
+	// dead-letter of each worker run. These are the queues the worker consumes
+	// (messaging.QueueClicks, messaging.QueueNotifications; messaging imports
+	// this package, so the names are repeated here).
+	for _, q := range []string{"clicks", "notifications"} {
+		for _, r := range []string{"ack", "nack", "dlq"} {
+			WorkerMessages.WithLabelValues(q, r)
+		}
+	}
 }
 
 // RegisterPublisherConnected exposes shortlink_rabbitmq_publisher_connected

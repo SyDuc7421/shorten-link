@@ -120,7 +120,10 @@ the compose network. It registers a throwaway user, creates 50 links, then ramps
 to `RATE` requests/s (default 50) and holds it for `DURATION` (default 5m): 90% redirects
 (5% of them unknown codes, so 404), 8% `GET /api/links`, 2% `POST /api/links`. Each
 request sends a random `X-Real-IP` in `10.0.0.0/8`, so the per-IP limits act like many
-users. The user's daily quota (100 links) runs out during long runs; those 429s are expected.
+users. The user's daily quota (`quota_daily`, default set in `internal/service/auth_service.go`)
+runs out during long runs; those 429s are expected. The run fails (non-zero exit) if fewer than
+99% of checks pass (any 5xx or connection error fails one), if redirect p95 is 300 ms or more,
+or if k6 drops iterations because it cannot keep up with `RATE`.
 
 ```bash
 RATE=100 DURATION=1m make load   # different rate / length

@@ -37,7 +37,8 @@ const scenarios = {
 export const options = {
   scenarios: { [SCENARIO]: scenarios[SCENARIO] },
   thresholds: {
-    "http_req_failed{expected_response:true}": ["rate<0.01"],
+    checks: ["rate>0.99"],
+    "dropped_iterations{scenario:steady}": ["count==0"],
     "http_req_duration{name:redirect}": ["p(95)<300"],
   },
 };
@@ -101,17 +102,19 @@ export default function (data) {
       headers: { "X-Real-IP": clientIP() },
       tags: { name: "redirect" },
     });
-    check(res, { "redirect 302/404/429": (x) => [302, 404, 429].includes(x.status) });
+    check(res, { "redirect 302/404/410/429": (x) => [302, 404, 410, 429].includes(x.status) });
   } else if (r < 0.98) {
-    http.get(`${BASE_URL}/api/links`, {
+    const res = http.get(`${BASE_URL}/api/links`, {
       headers: headers(data.token),
       tags: { name: "list" },
     });
+    check(res, { "list 200/429": (x) => x.status === 200 || x.status === 429 });
   } else {
-    http.post(
+    const res = http.post(
       `${BASE_URL}/api/links`,
       JSON.stringify({ url: `https://example.com/k6/${Date.now()}-${Math.random()}` }),
       { headers: headers(data.token), tags: { name: "create" } },
     );
+    check(res, { "create 201/429": (x) => x.status === 201 || x.status === 429 });
   }
 }

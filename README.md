@@ -102,6 +102,33 @@ The containers run as uid 65532, so `keys/private.pem` must be readable by it
 Desktop and OrbStack usually work as-is). Inside the containers `METRICS_PORT` is always 9100, whatever `.env` says. Both serve Prometheus
 metrics on port 9100 inside the compose network; it is not published to the host.
 
+### Observability stack (metrics, logs, alerts)
+
+`docker-compose.observability.yml` adds Prometheus, Alertmanager, Loki, Alloy,
+Grafana, cAdvisor and the MySQL/Redis exporters on top of the `app` profile.
+Needs `make keys` first and port 8080 free, like the section above.
+
+```bash
+make observe-check   # validate the Prometheus, Alertmanager and Alloy configs
+make observe         # build and start app + dependencies + stack, print the URLs
+make observe-down    # stop everything (keeps the data volumes)
+```
+
+- Grafana <http://localhost:3000>, user `admin`, password `GRAFANA_ADMIN_PASSWORD`
+  from `.env` (default `admin`). Loki logs are under Explore, e.g.
+  `{service="server"} | request_id="<X-Request-ID of a response>"`.
+- Prometheus <http://localhost:9090> (targets, alert rules), Alertmanager
+  <http://localhost:9093> (firing alerts; locally there is no notification target).
+- Retention: `PROMETHEUS_RETENTION` (default `15d`) and `LOKI_RETENTION` (default `168h`).
+- Alert rules live in `deploy/observability/prometheus/rules/shortlink.yml`; thresholds
+  are starting values. `ExpiryScanStale` (900s) is 3 x the default `EXPIRY_SCAN_INTERVAL`.
+
+Known gaps: `external_labels.env` in `deploy/observability/prometheus/prometheus.yml`
+is hard-coded to `local` (Prometheus does not expand env vars there; change it on
+the VPS), and mysqld-exporter connects as MySQL `root` (on the VPS use a dedicated
+user with `PROCESS, REPLICATION CLIENT, SELECT`). On macOS (Docker Desktop,
+OrbStack) cAdvisor sees the Linux VM, so some container names may be partial.
+
 ### Tests
 
 ```bash

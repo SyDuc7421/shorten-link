@@ -1,4 +1,4 @@
-.PHONY: run build test migrate lint docker-up admin-grant admin-revoke seed-admin
+.PHONY: run build test migrate lint docker-up admin-grant admin-revoke seed-admin observe observe-down observe-check
 
 run:
 	set -a && . ./.env && set +a && go run ./cmd/server
@@ -37,3 +37,26 @@ seed-admin:
 	set -a && . ./.env && set +a && \
 	if [ -z "$$ADMIN_EMAIL" ]; then echo "set ADMIN_EMAIL and ADMIN_PASSWORD in .env"; exit 2; fi && \
 	go run ./cmd/server admin create "$$ADMIN_EMAIL"
+
+# --- Observability stack (docker-compose.observability.yml) ---
+
+OBSERVE_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile app
+OBS_DIR = $(CURDIR)/deploy/observability
+
+# Build and start the app, its dependencies and the observability stack.
+observe:
+	$(OBSERVE_COMPOSE) up -d --build --wait
+	@echo "Grafana:      http://localhost:3000 (admin / GRAFANA_ADMIN_PASSWORD, default admin)"
+	@echo "Prometheus:   http://localhost:9090"
+	@echo "Alertmanager: http://localhost:9093"
+
+# Stop everything started by make observe. Volumes (metrics, logs, Grafana) are kept.
+observe-down:
+	$(OBSERVE_COMPOSE) down
+
+# Validate the configs with the same image versions as docker-compose.observability.yml.
+observe-check:
+	docker run --rm -v $(OBS_DIR)/prometheus:/etc/prometheus:ro --entrypoint promtool prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
+	docker run --rm -v $(OBS_DIR)/prometheus:/etc/prometheus:ro --entrypoint promtool prom/prometheus:v3.16.0 check rules /etc/prometheus/rules/shortlink.yml
+	docker run --rm -v $(OBS_DIR)/alertmanager:/etc/alertmanager:ro --entrypoint amtool prom/alertmanager:v0.35.0 check-config /etc/alertmanager/alertmanager.yml
+	docker run --rm -v $(OBS_DIR)/alloy:/etc/alloy:ro grafana/alloy:v1.22.0 fmt --test /etc/alloy/config.alloy > /dev/null && echo "alloy fmt: OK"

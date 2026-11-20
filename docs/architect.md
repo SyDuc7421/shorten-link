@@ -214,6 +214,7 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `deploy/migrations` | SQL schema (golang-migrate format) | — |
 | `deploy/nginx` | Reverse proxy config (template; `${DOMAIN}` filled in at container start) | — |
 | `Dockerfile`, `docker-compose.prod.yml` | Production images and single-VPS stack; see [deploy.md](deploy.md) | — |
+| `docker-compose.observability.yml`, `deploy/observability` | Prometheus, Alertmanager, Loki, Alloy, Grafana, cAdvisor and exporters overlay with alert rules; `make observe`, see README | — |
 | `.github/workflows/ci.yml` | Tests (with race detector), lint, govulncheck, image build | — |
 
 ---

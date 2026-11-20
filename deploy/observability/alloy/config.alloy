@@ -1,0 +1,65 @@
+// Collects stdout/stderr of every container on this Docker host and pushes it to Loki.
+// Loki labels: service, container, level, env. request_id goes to structured metadata.
+
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+}
+
+// Only the rules are used (by loki.source.docker below); targets is required but unused.
+discovery.relabel "containers" {
+	targets = []
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+}
+
+loki.source.docker "containers" {
+	host          = "unix:///var/run/docker.sock"
+	targets       = discovery.docker.containers.targets
+	relabel_rules = discovery.relabel.containers.rules
+	forward_to    = [loki.process.containers.receiver]
+}
+
+loki.process "containers" {
+	forward_to = [loki.write.loki.receiver]
+
+	// Non-JSON lines (MySQL, RabbitMQ) pass through without level/request_id.
+	stage.json {
+		expressions = {
+			level      = "",
+			request_id = "",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level = "",
+		}
+	}
+
+	stage.structured_metadata {
+		values = {
+			request_id = "",
+		}
+	}
+
+	stage.static_labels {
+		values = {
+			env = "local",
+		}
+	}
+}
+
+loki.write "loki" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

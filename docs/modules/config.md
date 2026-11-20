@@ -40,7 +40,10 @@ variable, which is better than failing on the first request.
 development. `docker-compose.prod.yml` overrides the hostnames and key paths
 inside the containers, so the same `.env` layout works in production. Some
 variables in `.env.example` (`DOMAIN`, `IMAGE_*`, `RABBITMQ_USER`, …) are read
-only by Docker Compose, not by the Go programs.
+only by Docker Compose, not by the Go programs. That includes the observability
+stack's `GRAFANA_ADMIN_PASSWORD` (empty = `admin`), `PROMETHEUS_RETENTION`
+(default `15d`) and `LOKI_RETENTION` (default `168h`), used by
+`docker-compose.observability.yml`.
 
 `docker-compose.yml` (local) does the same for the `app` profile: the `server`
 and `worker` containers get `MYSQL_HOST=mysql`, `REDIS_ADDR=redis:6379`,

@@ -112,6 +112,19 @@ services:
       - redis
     restart: unless-stopped
 
+  # Load generator, started on demand by make load (profile "tools"). Joins the
+  # default network of docker-compose.yml, so it reaches the server as server:8080.
+  k6:
+    image: grafana/k6:2.4.0
+    profiles: ["tools"]
+    environment:
+      BASE_URL: http://server:8080
+      RATE: ${RATE:-50}
+      DURATION: ${DURATION:-5m}
+      SCENARIO: ${SCENARIO:-steady}
+    volumes:
+      - ./deploy/observability/k6:/scripts:ro
+
 volumes:
   prometheus_data:
   loki_data:

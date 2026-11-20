@@ -1,4 +1,4 @@
-.PHONY: run build test migrate lint docker-up admin-grant admin-revoke seed-admin observe observe-down observe-check
+.PHONY: run build test migrate lint docker-up admin-grant admin-revoke seed-admin observe observe-down observe-check load
 
 run:
 	set -a && . ./.env && set +a && go run ./cmd/server
@@ -60,3 +60,8 @@ observe-check:
 	docker run --rm -v $(OBS_DIR)/prometheus:/etc/prometheus:ro --entrypoint promtool prom/prometheus:v3.16.0 check rules /etc/prometheus/rules/shortlink.yml
 	docker run --rm -v $(OBS_DIR)/alertmanager:/etc/alertmanager:ro --entrypoint amtool prom/alertmanager:v0.35.0 check-config /etc/alertmanager/alertmanager.yml
 	docker run --rm -v $(OBS_DIR)/alloy:/etc/alloy:ro grafana/alloy:v1.22.0 fmt --test /etc/alloy/config.alloy > /dev/null && echo "alloy fmt: OK"
+
+# Generate traffic against the server started by make observe.
+# RATE (req/s, default 50), DURATION (default 5m), SCENARIO=burst for 429s.
+load:
+	$(OBSERVE_COMPOSE) --profile tools run --rm k6 run /scripts/load.js

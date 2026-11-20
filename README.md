@@ -112,6 +112,19 @@ Needs `make keys` first and port 8080 free, like the section above.
 make observe-check   # validate the Prometheus, Alertmanager and Alloy configs
 make observe         # build and start app + dependencies + stack, print the URLs
 make observe-down    # stop everything (keeps the data volumes)
+make load            # 5 min of mixed traffic through k6 (needs make observe running)
+```
+
+`make load` runs `deploy/observability/k6/load.js` in a `grafana/k6` container on
+the compose network. It registers a throwaway user, creates 50 links, then ramps up
+to `RATE` requests/s (default 50) and holds it for `DURATION` (default 5m): 90% redirects
+(5% of them unknown codes, so 404), 8% `GET /api/links`, 2% `POST /api/links`. Each
+request sends a random `X-Real-IP` in `10.0.0.0/8`, so the per-IP limits act like many
+users. The user's daily quota (100 links) runs out during long runs; those 429s are expected.
+
+```bash
+RATE=100 DURATION=1m make load   # different rate / length
+SCENARIO=burst make load         # one IP at 5 req/s for 2 min: shows 429s and shortlink_ratelimit_rejected_total
 ```
 
 - Grafana <http://localhost:3000>, user `admin`, password `GRAFANA_ADMIN_PASSWORD`

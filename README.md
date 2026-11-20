@@ -117,6 +117,9 @@ make observe-down    # stop everything (keeps the data volumes)
 - Grafana <http://localhost:3000>, user `admin`, password `GRAFANA_ADMIN_PASSWORD`
   from `.env` (default `admin`). Loki logs are under Explore, e.g.
   `{service="server"} | request_id="<X-Request-ID of a response>"`.
+- Dashboards (Grafana folder `shorten-link`, provisioned and read-only, JSON in
+  `deploy/observability/grafana/dashboards/`): Service overview, Worker and queues,
+  Dependencies and host, Logs (has a `request_id` box to trace one request).
 - Prometheus <http://localhost:9090> (targets, alert rules), Alertmanager
   <http://localhost:9093> (firing alerts; locally there is no notification target).
 - Retention: `PROMETHEUS_RETENTION` (default `15d`) and `LOKI_RETENTION` (default `168h`).

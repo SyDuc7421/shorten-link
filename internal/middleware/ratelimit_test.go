@@ -11,6 +11,9 @@ import (
 	"github.com/redis/go-redis/v9"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/middleware"
 )
 
@@ -172,5 +175,19 @@ func TestRateLimit_FailsOpenWhenRedisDown(t *testing.T) {
 	limiter.ServeHTTP(w, requestFrom("10.0.0.10"))
 	if w.Code != http.StatusOK {
 		t.Errorf("want 200 when Redis unavailable, got %d", w.Code)
+	}
+}
+
+func TestRateLimit_RejectionCounted(t *testing.T) {
+	rdb := setupTestRedis(t)
+	limiter := middleware.RateLimit(rdb, "test", 1, time.Minute)(okHandler())
+	counter := metrics.RateLimited.WithLabelValues("test")
+	before := testutil.ToFloat64(counter)
+
+	for i := 0; i < 2; i++ {
+		limiter.ServeHTTP(httptest.NewRecorder(), requestFrom("10.0.0.9"))
+	}
+	if d := testutil.ToFloat64(counter) - before; d != 1 {
+		t.Errorf("rejected delta = %v, want 1 (only the second request is over the limit)", d)
 	}
 }

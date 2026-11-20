@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/pkg/idgen"
 )
 
@@ -125,6 +126,7 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias s
 
 	s.publishAsync("link.created", map[string]any{"code": code, "user_id": userID})
 
+	metrics.LinksCreated.Inc()
 	return link, nil
 }
 
@@ -166,8 +168,19 @@ func aliasProblem(alias string) string {
 
 // Resolve returns the original URL for a short code.
 // Redis-first; falls back to MySQL on miss. Click event is published async.
-func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) {
-	if rawURL, err := s.cache.Get(ctx, code); err == nil {
+func (s *LinkService) Resolve(ctx context.Context, code string) (_ string, err error) {
+	defer func() { metrics.Redirects.WithLabelValues(redirectOutcome(err)).Inc() }()
+
+	rawURL, cacheErr := s.cache.Get(ctx, code)
+	switch {
+	case cacheErr == nil:
+		metrics.CacheRequests.WithLabelValues("hit").Inc()
+	case errors.Is(cacheErr, ErrNotFound):
+		metrics.CacheRequests.WithLabelValues("miss").Inc()
+	default:
+		metrics.CacheRequests.WithLabelValues("error").Inc()
+	}
+	if cacheErr == nil {
 		if rawURL == disabledMarker {
 			return "", ErrLinkDisabled
 		}
@@ -197,6 +210,20 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (string, error) 
 	s.publishAsync("link.clicked", map[string]any{"code": code})
 
 	return link.OriginalURL, nil
+}
+
+// redirectOutcome maps Resolve's final error to the redirect metric label.
+func redirectOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "found"
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrLinkDisabled):
+		return "disabled"
+	default:
+		return "error"
+	}
 }
 
 // publishAsync fires an event without blocking the request. The timeout bounds

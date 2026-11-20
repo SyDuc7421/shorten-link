@@ -87,6 +87,8 @@ exactly one attempt and the error goes back to the user as `409`.
 
 After a successful insert, the cache is warmed with the URL (TTL 24 h, or less
 if the link expires sooner), and a `link.created` event is published.
+`shortlink_links_created_total` is incremented only after the insert succeeded,
+so rejected requests are not counted.
 
 ### Following a link: `Resolve`
 
@@ -99,6 +101,14 @@ if the link expires sooner), and a `link.created` event is published.
    clicks on a disabled, often abusive, link from each querying MySQL. If the
    link has expired, return `ErrNotFound`. Otherwise warm the cache, publish
    `link.clicked` and return.
+
+**Metrics.** `Resolve` counts every cache lookup in
+`shortlink_link_cache_requests_total{result}`: `hit` (any value, including the
+`!disabled` marker), `miss` (`ErrNotFound`) or `error` (Redis failed; the
+lookup then falls back to MySQL). A deferred function over the named error
+return counts the final outcome in `shortlink_redirects_total{outcome}`:
+`found` (nil), `not_found`, `disabled` or `error`. Neither uses the short code
+as a label.
 
 No click is published for a disabled link. Whoever disables or enables a link
 or a user must delete the affected cache keys (see `AdminService`), otherwise
@@ -149,6 +159,12 @@ plan with a daily quota of 100, and a token pair is issued.
    (`users.disabled_at` set), return `ErrAccountDisabled`; otherwise issue a
    token pair. The disabled check comes after the password check on purpose:
    only someone who knows the password learns that the account is disabled.
+
+**Metrics.** `Login` is a thin wrapper that counts the result in
+`shortlink_auth_logins_total{result}`: `ok`, `locked` (`ErrAccountLocked`) or
+`fail` (`ErrInvalidCredentials`, `ErrAccountDisabled`). Infrastructure errors
+(Redis or MySQL down) are not counted, since they say nothing about the
+credentials.
 
 **Why the dummy hash?** Without it, a login for an unknown email would return
 almost instantly, while a real email would take ~0.25 s for bcrypt. That

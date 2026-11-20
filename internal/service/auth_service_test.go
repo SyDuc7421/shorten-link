@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 	"github.com/april/shorten-link/pkg/idgen"
 )
@@ -940,4 +943,48 @@ func TestResetPassword_ForgotURLFromResetURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLogin_MetricsByResult(t *testing.T) {
+	count := func(result string) float64 {
+		return testutil.ToFloat64(metrics.Logins.WithLabelValues(result))
+	}
+	ctx := context.Background()
+
+	t.Run("ok", func(t *testing.T) {
+		svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+		svc.Register(ctx, "a@b.com", "secret123") //nolint:errcheck
+		before := count("ok")
+		if _, err := svc.Login(ctx, "a@b.com", "secret123"); err != nil {
+			t.Fatal(err)
+		}
+		if d := count("ok") - before; d != 1 {
+			t.Errorf("ok delta = %v, want 1", d)
+		}
+	})
+	t.Run("wrong password", func(t *testing.T) {
+		svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+		svc.Register(ctx, "a@b.com", "secret123") //nolint:errcheck
+		before := count("fail")
+		if _, err := svc.Login(ctx, "a@b.com", "wrongpass"); !errors.Is(err, service.ErrInvalidCredentials) {
+			t.Fatalf("want ErrInvalidCredentials, got %v", err)
+		}
+		if d := count("fail") - before; d != 1 {
+			t.Errorf("fail delta = %v, want 1", d)
+		}
+	})
+	t.Run("locked", func(t *testing.T) {
+		svc := newAuthSvc(t, newMockUserRepo(), newMockTokenCache())
+		svc.Register(ctx, "a@b.com", "secret123") //nolint:errcheck
+		for i := 0; i < 5; i++ {
+			svc.Login(ctx, "a@b.com", "wrongpass") //nolint:errcheck
+		}
+		before := count("locked")
+		if _, err := svc.Login(ctx, "a@b.com", "secret123"); !errors.Is(err, service.ErrAccountLocked) {
+			t.Fatalf("want ErrAccountLocked, got %v", err)
+		}
+		if d := count("locked") - before; d != 1 {
+			t.Errorf("locked delta = %v, want 1", d)
+		}
+	})
 }

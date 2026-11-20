@@ -42,6 +42,13 @@ inside the containers, so the same `.env` layout works in production. Some
 variables in `.env.example` (`DOMAIN`, `IMAGE_*`, `RABBITMQ_USER`, …) are read
 only by Docker Compose, not by the Go programs.
 
+`docker-compose.yml` (local) does the same for the `app` profile: the `server`
+and `worker` containers get `MYSQL_HOST=mysql`, `REDIS_ADDR=redis:6379`,
+`RABBITMQ_URL` built from `RABBITMQ_USER`/`RABBITMQ_PASSWORD` (both default to
+`guest` when unset), `/keys/...` JWT paths and `METRICS_PORT=9100`. On the host
+(`make run`) `RABBITMQ_URL` is used as written, so keep it in step with
+`RABBITMQ_USER`/`RABBITMQ_PASSWORD`.
+
 ## Connections (`connect.go`)
 
 | Method | What it does |

@@ -58,7 +58,8 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    open http://localhost:8080/docs        # Swagger UI
    ```
 
-   The RabbitMQ management UI is at http://localhost:15672 (guest / guest).
+   The RabbitMQ management UI is at http://localhost:15672. Log in with
+   `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env` (`guest` / `guest` if unset).
 
 6. To use the admin API (`/api/admin/*`), set `ADMIN_EMAIL` and
    `ADMIN_PASSWORD` in `.env`, then:
@@ -68,6 +69,37 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    ```
 
    For an account you already registered: `make admin-grant EMAIL=you@example.com`.
+
+### RabbitMQ credentials
+
+The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`,
+defaulting to `guest` / `guest`, so an existing `.env` keeps working.
+`.env.example` now sets `shortlink` / `changeme_rabbit` and a matching
+`RABBITMQ_URL`. If you set or change them, recreate RabbitMQ and update
+`RABBITMQ_URL` in your `.env` to match (the user is only created on first start
+of an empty data directory, so recreate with a fresh container):
+
+```bash
+docker compose up -d --force-recreate rabbitmq
+```
+
+### Run the app in containers
+
+Instead of `go run`, the server and worker can run in containers too (profile
+`app`). It runs the migrations, then starts both, with the in-network hosts
+and the keys from `./keys` mounted read-only. Needs `make keys` first. Stop host
+`make run` first, since both use port 8080. Published ports bind `127.0.0.1` only.
+
+```bash
+docker compose --profile app up -d --build --wait
+curl http://localhost:8080/healthz
+docker compose --profile app down        # stop (keeps the data volumes)
+```
+
+The containers run as uid 65532, so `keys/private.pem` must be readable by it
+(on Linux: `chmod 640` and `chown :65532`, as in the deploy steps below; Docker
+Desktop and OrbStack usually work as-is). Both containers serve Prometheus
+metrics on port 9100 inside the compose network; it is not published to the host.
 
 ### Tests
 

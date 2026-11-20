@@ -6,10 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
+
+	"github.com/april/shorten-link/internal/ctxkey"
+	"github.com/april/shorten-link/internal/metrics"
 )
 
 // reconnectDelay is the pause between reconnect attempts.
@@ -25,6 +29,12 @@ type Publisher struct {
 	ch   *amqp.Channel
 	log  *zap.Logger
 
+	reconnectDelay time.Duration // copied from the package default at construction
+
+	// connected mirrors "conn is live" without p.mu, so a metrics scrape never
+	// waits behind a Publish that holds the lock during network I/O.
+	connected atomic.Bool
+
 	done      chan struct{}
 	closeOnce sync.Once
 }
@@ -32,7 +42,7 @@ type Publisher struct {
 // NewPublisher connects using dial. It does not fail if the broker is
 // unreachable; it keeps retrying in the background instead.
 func NewPublisher(dial func() (*amqp.Connection, error), log *zap.Logger) *Publisher {
-	p := &Publisher{dial: dial, log: log, done: make(chan struct{})}
+	p := &Publisher{dial: dial, log: log, reconnectDelay: reconnectDelay, done: make(chan struct{})}
 	if err := p.connect(); err != nil {
 		log.Warn("rabbitmq unavailable, will retry", zap.Error(err))
 	}
@@ -59,6 +69,7 @@ func (p *Publisher) connect() error {
 	p.mu.Lock()
 	p.conn, p.ch = conn, ch
 	p.mu.Unlock()
+	p.connected.Store(true)
 	return nil
 }
 
@@ -68,10 +79,13 @@ func (p *Publisher) reconnectLoop() {
 		conn := p.conn
 		p.mu.Unlock()
 
-		if conn != nil && !conn.IsClosed() {
+		if conn == nil || conn.IsClosed() {
+			p.connected.Store(false)
+		} else {
 			closed := conn.NotifyClose(make(chan *amqp.Error, 1))
 			select {
 			case err := <-closed: // nil on a clean close
+				p.connected.Store(false)
 				p.log.Warn("rabbitmq connection lost", zap.Error(err))
 			case <-p.done:
 				return
@@ -79,7 +93,7 @@ func (p *Publisher) reconnectLoop() {
 		}
 
 		select {
-		case <-time.After(reconnectDelay):
+		case <-time.After(p.reconnectDelay):
 		case <-p.done:
 			return
 		}
@@ -98,6 +112,10 @@ func (p *Publisher) IsClosed() bool {
 	return p.conn == nil || p.conn.IsClosed()
 }
 
+// Connected reports whether the publisher had a live connection at the last
+// connect or drop. It never blocks, so metrics use it instead of IsClosed.
+func (p *Publisher) Connected() bool { return p.connected.Load() }
+
 func (p *Publisher) openChannel() error {
 	ch, err := p.conn.Channel()
 	if err != nil {
@@ -107,20 +125,56 @@ func (p *Publisher) openChannel() error {
 	return nil
 }
 
-// Publish serialises payload as JSON and publishes it to the shortlink exchange.
-// If the channel has been closed it attempts to reopen once before returning an error.
-func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("publisher: marshal: %w", err)
-	}
+// HeaderRequestID is the AMQP header that carries the request ID to the worker.
+const HeaderRequestID = "x-request-id"
 
+// newPublishing builds the message, adding the request ID header when ctx has one.
+func newPublishing(ctx context.Context, body []byte) amqp.Publishing {
 	msg := amqp.Publishing{
 		DeliveryMode: amqp.Persistent,
 		ContentType:  "application/json",
 		Timestamp:    time.Now(),
 		Body:         body,
 	}
+	if id, ok := ctxkey.RequestID(ctx); ok {
+		msg.Headers = amqp.Table{HeaderRequestID: id}
+	}
+	return msg
+}
+
+// requestIDOf returns the request ID header of d, or "" if absent or not a string.
+func requestIDOf(d amqp.Delivery) string {
+	id, _ := d.Headers[HeaderRequestID].(string)
+	return id
+}
+
+// ridField is a zap field for the request ID, or zap.Skip() when empty.
+func ridField(id string) zap.Field {
+	if id == "" {
+		return zap.Skip()
+	}
+	return zap.String("request_id", id)
+}
+
+// Publish serialises payload as JSON and publishes it to the shortlink exchange.
+// If the channel has been closed it attempts to reopen once before returning an error.
+func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any) error {
+	err := p.publish(ctx, routingKey, payload)
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	metrics.Publish(routingKey, result)
+	return err
+}
+
+func (p *Publisher) publish(ctx context.Context, routingKey string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("publisher: marshal: %w", err)
+	}
+
+	msg := newPublishing(ctx, body)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,6 +197,7 @@ func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any)
 // Close stops reconnecting and closes the connection.
 func (p *Publisher) Close() error {
 	p.closeOnce.Do(func() { close(p.done) })
+	p.connected.Store(false)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.conn == nil {

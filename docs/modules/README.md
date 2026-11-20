@@ -30,7 +30,8 @@ If you read everything, this order follows a request from the outside in:
 | 9 | `internal/mail` | [mail.md](mail.md) | Sends the password reset email (SMTP, or the log when SMTP is not configured) |
 | 10 | `config` | [config.md](config.md) | Environment variables, connections to MySQL/Redis/RabbitMQ, RSA keys |
 | 11 | `pkg/idgen` | [idgen.md](idgen.md) | Snowflake IDs and the Base62 short codes made from them |
-| 12 | `internal/ctxkey`, `internal/logger`, `api` | [support.md](support.md) | Small helper packages |
+| 12 | `internal/metrics` | [metrics.md](metrics.md) | Prometheus registry, every metric, and the `/metrics` listener |
+| 13 | `internal/ctxkey`, `internal/logger`, `api` | [support.md](support.md) | Small helper packages |
 
 ## The one rule that explains the layout
 

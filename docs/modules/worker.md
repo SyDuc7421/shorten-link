@@ -4,16 +4,19 @@
 events from RabbitMQ and adds them to each link's `clicks` column in MySQL. It
 also reads notification events and stores them in the `notifications` table.
 It also **publishes**: a timer scans for links about to expire and publishes
-`link.expiring` events. It has no HTTP server.
+`link.expiring` events. It has no public HTTP server; only an optional `/metrics` listener (`METRICS_PORT`).
 
 **Where it sits.** It uses `config`, `internal/messaging`,
-`internal/repository` and `internal/service` (for the expiry scanner).
+`internal/repository`, `internal/service` (for the expiry scanner) and
+`internal/metrics` (the `/metrics` listener).
 Nothing imports it. The server and the worker share no memory; they only meet
 through RabbitMQ and MySQL.
 
 ## What happens when it runs
 
-1. Load config and create the logger (exit 1 on failure).
+1. Load config and create the logger (exit 1 on failure). Then start the
+   `/metrics` listener if `METRICS_PORT` is not `0` (fatal if the port cannot
+   be bound).
 2. Connect to MySQL and RabbitMQ. **Both are required**: unlike the server, the
    worker has nothing useful to do without them, so it exits and lets Docker
    restart it.
@@ -25,12 +28,20 @@ through RabbitMQ and MySQL.
    dead-lettering are in
    [messaging.md](messaging.md#the-consumers-consumergo).
 5. Create a publisher (`messaging.NewPublisher`, which reconnects on its own)
-   and start the `ExpiryScanner` in a fifth goroutine. Every
+   (its connection state feeds `shortlink_rabbitmq_publisher_connected`) and
+   start the `ExpiryScanner` in a fifth goroutine. Every
    `EXPIRY_SCAN_INTERVAL` (default 5 minutes) it publishes `link.expiring` for
    links that expire within 24 hours; see
    [service.md](service.md#expiry-scanner-expiry_scannergo). A broker outage
-   only makes publishes fail and be retried on the next scan.
+   only makes publishes fail and be retried on the next scan. Each scan adds
+   `shortlink_worker_expiry_scan_total{result=ok|error}`, and a successful one
+   sets `shortlink_worker_expiry_scan_last_success_timestamp_seconds`.
 6. Wait in `waitForShutdown`.
+
+Messages published by the server carry the originating request's ID in the
+`x-request-id` header. The consumers log it as `request_id` on failures, on
+dead-lettered messages and when a notification is stored, so one request can be
+followed from the server log into the worker log.
 
 ## Shutdown and failure
 

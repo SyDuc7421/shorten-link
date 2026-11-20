@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 	"github.com/april/shorten-link/pkg/idgen"
 )
@@ -63,7 +66,7 @@ func (c *mockCache) Get(_ context.Context, code string) (string, error) {
 	}
 	v, ok := c.store[code]
 	if !ok {
-		return "", errors.New("not found")
+		return "", service.ErrNotFound // like the Redis cache
 	}
 	return v, nil
 }
@@ -555,5 +558,134 @@ func TestResolve_CachedDisabledMarker(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if pub.n.Load() != 0 {
 		t.Error("click published for a disabled link")
+	}
+}
+
+// --- metrics tests ---
+
+func cacheCount(result string) float64 {
+	return testutil.ToFloat64(metrics.CacheRequests.WithLabelValues(result))
+}
+
+func redirectCount(outcome string) float64 {
+	return testutil.ToFloat64(metrics.Redirects.WithLabelValues(outcome))
+}
+
+func TestResolve_CacheHitCountsHitAndFound(t *testing.T) {
+	cache := newMockCache()
+	cache.store["abc"] = "https://cached.com"
+	svc := newSvc(&mockRepo{}, cache)
+	hit, found := cacheCount("hit"), redirectCount("found")
+
+	if _, err := svc.Resolve(context.Background(), "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if d := cacheCount("hit") - hit; d != 1 {
+		t.Errorf("cache hit delta = %v, want 1", d)
+	}
+	if d := redirectCount("found") - found; d != 1 {
+		t.Errorf("found delta = %v, want 1", d)
+	}
+}
+
+func TestResolve_CacheMissDBHitCountsMissAndFound(t *testing.T) {
+	repo := &mockRepo{getByCodeFn: func(code string) (*service.Link, error) {
+		return &service.Link{ShortCode: code, OriginalURL: "https://db.com"}, nil
+	}}
+	svc := newSvc(repo, newMockCache())
+	miss, found := cacheCount("miss"), redirectCount("found")
+
+	if _, err := svc.Resolve(context.Background(), "xyz"); err != nil {
+		t.Fatal(err)
+	}
+	if d := cacheCount("miss") - miss; d != 1 {
+		t.Errorf("cache miss delta = %v, want 1", d)
+	}
+	if d := redirectCount("found") - found; d != 1 {
+		t.Errorf("found delta = %v, want 1", d)
+	}
+}
+
+func TestResolve_CacheErrorCountsError(t *testing.T) {
+	cache := newMockCache()
+	cache.getErr = errors.New("redis down")
+	repo := &mockRepo{getByCodeFn: func(code string) (*service.Link, error) {
+		return &service.Link{ShortCode: code, OriginalURL: "https://db.com"}, nil
+	}}
+	svc := newSvc(repo, cache)
+	cerr := cacheCount("error")
+
+	if _, err := svc.Resolve(context.Background(), "xyz"); err != nil {
+		t.Fatal(err)
+	}
+	if d := cacheCount("error") - cerr; d != 1 {
+		t.Errorf("cache error delta = %v, want 1", d)
+	}
+}
+
+func TestResolve_UnknownCodeCountsNotFound(t *testing.T) {
+	repo := &mockRepo{getByCodeFn: func(string) (*service.Link, error) { return nil, service.ErrNotFound }}
+	svc := newSvc(repo, newMockCache())
+	nf := redirectCount("not_found")
+
+	if _, err := svc.Resolve(context.Background(), "nope"); !errors.Is(err, service.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	if d := redirectCount("not_found") - nf; d != 1 {
+		t.Errorf("not_found delta = %v, want 1", d)
+	}
+}
+
+func TestResolve_DisabledCountsDisabled(t *testing.T) {
+	cache := newMockCache()
+	cache.store["abc"] = "!disabled"
+	svc := newSvc(&mockRepo{}, cache)
+	hit, dis := cacheCount("hit"), redirectCount("disabled")
+
+	if _, err := svc.Resolve(context.Background(), "abc"); !errors.Is(err, service.ErrLinkDisabled) {
+		t.Fatalf("want ErrLinkDisabled, got %v", err)
+	}
+	if d := cacheCount("hit") - hit; d != 1 {
+		t.Errorf("a cached disabled marker is a cache hit; delta = %v", d)
+	}
+	if d := redirectCount("disabled") - dis; d != 1 {
+		t.Errorf("disabled delta = %v, want 1", d)
+	}
+}
+
+func TestResolve_RepoFailureCountsError(t *testing.T) {
+	repo := &mockRepo{getByCodeFn: func(string) (*service.Link, error) { return nil, errors.New("db down") }}
+	svc := newSvc(repo, newMockCache())
+	e := redirectCount("error")
+
+	if _, err := svc.Resolve(context.Background(), "abc"); err == nil {
+		t.Fatal("want error")
+	}
+	if d := redirectCount("error") - e; d != 1 {
+		t.Errorf("error delta = %v, want 1", d)
+	}
+}
+
+func TestShorten_OKIncrementsLinksCreated(t *testing.T) {
+	svc := newSvcWithGen(&mockRepo{}, newMockCache(), newGen(t))
+	before := testutil.ToFloat64(metrics.LinksCreated)
+
+	if _, err := svc.Shorten(context.Background(), 1, "https://example.com", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if d := testutil.ToFloat64(metrics.LinksCreated) - before; d != 1 {
+		t.Errorf("links created delta = %v, want 1", d)
+	}
+}
+
+func TestShorten_InvalidURLDoesNotIncrement(t *testing.T) {
+	svc := newSvc(&mockRepo{}, newMockCache())
+	before := testutil.ToFloat64(metrics.LinksCreated)
+
+	if _, err := svc.Shorten(context.Background(), 1, "ftp://x.com", "", nil); !errors.Is(err, service.ErrInvalidURL) {
+		t.Fatalf("want ErrInvalidURL, got %v", err)
+	}
+	if d := testutil.ToFloat64(metrics.LinksCreated) - before; d != 0 {
+		t.Errorf("links created delta = %v, want 0", d)
 	}
 }

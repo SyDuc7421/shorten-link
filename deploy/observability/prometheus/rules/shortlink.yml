@@ -1,0 +1,85 @@
+# Alert rules. Thresholds are starting values; tune them once real traffic exists.
+groups:
+  - name: shortlink
+    rules:
+      - alert: HighErrorRate
+        expr: sum(rate(shortlink_http_requests_total{status=~"5.."}[5m])) / sum(rate(shortlink_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 5% of HTTP requests return 5xx
+          description: "{{ $value | humanizePercentage }} of requests to the server returned a 5xx status over the last 5 minutes."
+
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(shortlink_http_request_duration_seconds_bucket{route="GET /{code}"}[5m]))) > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Redirect p95 latency above 300ms
+          description: "p95 latency of GET /{code} is {{ $value | humanizeDuration }} (threshold 300ms)."
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrape target {{ $labels.job }} is down"
+          description: "Prometheus could not scrape {{ $labels.instance }} (job {{ $labels.job }}) for 2 minutes."
+
+      - alert: DependencyDown
+        expr: mysql_up == 0 or redis_up == 0 or up{job="rabbitmq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dependency down ({{ $labels.job }})"
+          description: "MySQL, Redis or RabbitMQ is unreachable: {{ $labels.job }} on {{ $labels.instance }} reports down for 2 minutes."
+
+      - alert: DeadLettered
+        expr: sum by (queue) (increase(shortlink_worker_messages_total{job="worker",result="dlq"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages dead-lettered from {{ $labels.queue }}"
+          description: "The worker dead-lettered about {{ $value }} messages from {{ $labels.queue }} in the last 10 minutes; check the worker logs for the dead-letter lines."
+
+      - alert: DLQNotDraining
+        expr: rabbitmq_detailed_queue_messages_ready{queue=~"clicks.dlq|notifications.dlq"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter queue {{ $labels.queue }} is not draining"
+          description: "{{ $value }} dead-letter messages are sitting unconsumed in {{ $labels.queue }}; the worker is not draining them, so check that it is running."
+
+      - alert: ClickQueueBacklog
+        expr: rabbitmq_detailed_queue_messages_ready{queue="clicks"} > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Click queue backlog above 10000
+          description: "{{ $value }} click events are waiting in the clicks queue; the worker is not keeping up or is stopped."
+
+      - alert: PublisherDisconnected
+        expr: shortlink_rabbitmq_publisher_connected == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ publisher disconnected ({{ $labels.job }})"
+          description: "The {{ $labels.job }} publisher has had no RabbitMQ connection for 2 minutes; events are being dropped."
+
+      # 900s = 3 x the default EXPIRY_SCAN_INTERVAL (5m). Change it together with that setting.
+      # job="worker": the server registers the same gauge but never scans, so it stays 0 there.
+      - alert: ExpiryScanStale
+        expr: time() - shortlink_worker_expiry_scan_last_success_timestamp_seconds{job="worker"} > 900
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Expiry scan has not succeeded for 15 minutes
+          description: "The worker's last successful expiry scan was {{ $value | humanizeDuration }} ago."

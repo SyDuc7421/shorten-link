@@ -15,3 +15,16 @@ func UserID(ctx context.Context) (int64, bool) {
 	id, ok := ctx.Value(userIDKey{}).(int64)
 	return id, ok
 }
+
+type requestIDKey struct{}
+
+// SetRequestID stores the request ID in ctx. Called by the RequestID middleware.
+func SetRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// RequestID retrieves the request ID. ok is false if not set.
+func RequestID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(requestIDKey{}).(string)
+	return id, ok && id != ""
+}

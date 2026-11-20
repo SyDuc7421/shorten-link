@@ -20,6 +20,7 @@ import (
 	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/internal/mail"
 	"github.com/april/shorten-link/internal/messaging"
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/middleware"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
@@ -65,6 +66,7 @@ func main() {
 	// redirects while RabbitMQ is down, and the publisher reconnects on its own.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
+	metrics.RegisterPublisherConnected(pub.Connected)
 
 	// RSA keys for JWT
 	privateKey, publicKey, err := cfg.LoadRSAKeys()
@@ -128,11 +130,14 @@ func main() {
 	root := withRateLimits(mux, rdb)
 
 	// Middleware chain (outermost → innermost):
-	// TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
+	// Metrics → TimeoutHandler → SecureHeaders → CORS → JWTAuth → RequestID → AccessLog → Recover → root
 	// AccessLog and Recover sit inside RequestID so their lines carry request_id,
 	// and AccessLog wraps Recover so a recovered panic is logged with status 500.
-	chain := http.TimeoutHandler(
-		middleware.SecureHeaders(
+	// Metrics is outermost so a request cut off by TimeoutHandler counts as 503;
+	// RecordRoute sits just inside TimeoutHandler and reports the matched mux
+	// pattern back to it, so 413, CORS and 429 responses still carry their route.
+	chain := metrics.Middleware(http.TimeoutHandler(
+		metrics.RecordRoute(mux, middleware.SecureHeaders(
 			middleware.CORS(allowedOrigins)(
 				middleware.JWTAuth(authSvc)(
 					middleware.RequestID(log)(
@@ -144,12 +149,19 @@ func main() {
 					),
 				),
 			),
-		),
+		)),
 		10*time.Second,
 		`{"error":"request timeout"}`,
-	)
+	))
 
 	srv := newServer(cfg.Port, chain)
+
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	defer stopMetrics()
+	metricsStopped, err := metrics.Serve(metricsCtx, cfg.MetricsPort, log)
+	if err != nil {
+		log.Fatal("failed to start metrics listener", zap.Error(err))
+	}
 
 	go func() {
 		log.Info("server starting", zap.Int("port", cfg.Port))
@@ -168,6 +180,8 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("forced shutdown", zap.Error(err))
 	}
+	stopMetrics()
+	<-metricsStopped
 	log.Info("stopped")
 }
 

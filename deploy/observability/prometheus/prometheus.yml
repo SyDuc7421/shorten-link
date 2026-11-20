@@ -1,0 +1,57 @@
+# Prometheus config for the observability overlay (docker-compose.observability.yml).
+# Every target is a compose service name; job = service name.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  # Prometheus does not expand env vars here: change this to "prod" on the VPS.
+  external_labels:
+    env: local
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: server
+    static_configs:
+      - targets: ["server:9100"]
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9100"]
+  - job_name: mysqld-exporter
+    static_configs:
+      - targets: ["mysqld-exporter:9104"]
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+  # rabbitmq_prometheus plugin: aggregated node metrics
+  - job_name: rabbitmq
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+  # per-queue depth (rabbitmq_detailed_queue_messages_ready{queue=...})
+  - job_name: rabbitmq-queues
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]
+    static_configs:
+      - targets: ["rabbitmq:15692"]

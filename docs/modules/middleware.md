@@ -10,6 +10,11 @@ apply to many routes, so individual handlers stay focused on their own job.
 
 ## The middlewares
 
+The HTTP metrics middleware (`metrics.Middleware` and `metrics.RecordRoute`)
+lives in [`internal/metrics`](metrics.md), not here. It is the outermost layer,
+outside `TimeoutHandler`, so a request cut off by the 10 s timeout is counted
+as `503` with its real route.
+
 ### `JWTAuth` and `RequireAuth` (`auth.go`)
 
 Authentication is split into two steps on purpose:
@@ -52,7 +57,9 @@ This is a true sliding window: there is no burst at the start of each minute as
 there would be with fixed buckets.
 
 **When refused**, it answers `429 {"error":"rate limit exceeded"}` with a
-`Retry-After` header set to the window length in seconds.
+`Retry-After` header set to the window length in seconds, and increments
+`shortlink_ratelimit_rejected_total{action}`. Requests that fail open because
+Redis is down are not counted.
 
 **Which IP?** `clientIP` uses the TCP peer address. It trusts the `X-Real-IP`
 header only when the peer is a private or loopback address, which in
@@ -77,8 +84,12 @@ immediately and never reaches a handler.
 
 ### `RequestID` (`requestid.go`)
 
-Reuses the incoming `X-Request-ID` header, or generates a random 32-hex-character
-ID. The ID is echoed back in the response header, and a logger tagged with
+Reuses the incoming `X-Request-ID` header only if it matches
+`^[A-Za-z0-9_-]{1,64}$`. Anything else (too long, spaces, newlines, non-ASCII,
+empty) is ignored and a random 32-hex-character ID is generated, so a hostile
+client cannot put odd bytes into logs or RabbitMQ headers. The ID is also
+stored in the context (`ctxkey.SetRequestID` / `ctxkey.RequestID`) so the
+service layer can pass it to the worker. The ID is echoed back in the response header, and a logger tagged with
 `request_id` is put in the context. Code further down can log with
 `logger.FromContext(ctx)` so every line for one request carries the same ID.
 `AccessLog` and `Recover` do; handlers and services do not yet.

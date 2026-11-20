@@ -12,6 +12,7 @@ import (
 	"github.com/april/shorten-link/config"
 	"github.com/april/shorten-link/internal/logger"
 	"github.com/april/shorten-link/internal/messaging"
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/repository"
 	"github.com/april/shorten-link/internal/service"
 )
@@ -32,6 +33,11 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	metricsStopped, err := metrics.Serve(ctx, cfg.MetricsPort, log)
+	if err != nil {
+		log.Fatal("failed to start metrics listener", zap.Error(err))
+	}
 
 	db, err := cfg.OpenMySQL(ctx)
 	if err != nil {
@@ -90,6 +96,7 @@ func main() {
 	// running if a publish fails; the next scan retries.
 	pub := messaging.NewPublisher(cfg.DialRabbitMQ, log)
 	defer pub.Close()
+	metrics.RegisterPublisherConnected(pub.Connected)
 	scanner := service.NewExpiryScanner(repository.NewNotificationMySQL(db), pub, log)
 
 	errc := make(chan error, 5)
@@ -122,7 +129,9 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	if waitForShutdown(log, quit, errc, cancel, 5) {
+	failed := waitForShutdown(log, quit, errc, cancel, 5)
+	<-metricsStopped // ctx is cancelled by now; Serve's own shutdown is capped at 5s
+	if failed {
 		log.Error("worker stopped after consumer failure")
 		log.Sync() //nolint:errcheck // os.Exit skips deferred Sync
 		os.Exit(1)

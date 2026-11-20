@@ -21,6 +21,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/april/shorten-link/internal/logger"
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/pkg/idgen"
 )
 
@@ -137,6 +138,21 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (*To
 // Login verifies credentials and returns a token pair.
 // Accounts are locked for lockoutTTL after lockoutMax consecutive failures.
 func (s *AuthService) Login(ctx context.Context, email, password string) (*TokenPair, error) {
+	pair, err := s.login(ctx, email, password)
+	switch {
+	case err == nil:
+		metrics.Login("ok")
+	case errors.Is(err, ErrAccountLocked):
+		metrics.Login("locked")
+	case errors.Is(err, ErrInvalidCredentials), errors.Is(err, ErrAccountDisabled):
+		metrics.Login("fail")
+	default:
+		metrics.Login("error") // Redis or MySQL failed, not the credentials
+	}
+	return pair, err
+}
+
+func (s *AuthService) login(ctx context.Context, email, password string) (*TokenPair, error) {
 	// Taken before the password check: a reset that lands after this moment
 	// must invalidate a session authorised by the old password.
 	authorizedAt := time.Now()

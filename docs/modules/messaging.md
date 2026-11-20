@@ -72,6 +72,18 @@ If publishing on a channel fails (channels can close on their own after an
 error), `Publish` reopens the channel once and retries.
 
 `IsClosed()` reports whether there is a live connection. `/healthz` uses it.
+`Connected()` is the same idea from an atomic flag set by `connect` and the
+reconnect loop; it never takes the lock, so the metrics gauge uses it.
+
+**Request ID.** `newPublishing(ctx, body)` builds the message. If the context
+carries a request ID (`ctxkey.RequestID`) it is sent as the `x-request-id`
+header (`HeaderRequestID`); otherwise there are no headers. Consumers read it
+back with `requestIDOf(delivery)` and log it as `request_id`.
+
+**Metrics.** Every `Publish` call adds exactly one
+`shortlink_rabbitmq_publish_total{routing_key,result}`, with `result` `ok` or
+`error`, on every return path (marshal error, not connected, retry failure,
+success).
 
 **What is not guaranteed.** Clicks published while disconnected are lost: the
 service ignores publish errors on purpose. Publisher confirms are not enabled
@@ -103,14 +115,29 @@ messages at a time, which matches the batch size.
 When the context is cancelled (shutdown) or the channel closes, the consumer
 flushes what it has before returning, so nothing already received is lost.
 
+**Logging.** When a flush fails, one error line lists the `request_ids` of
+the pending deliveries (non-empty ones only, at most 500). A successful flush
+logs nothing new.
+
+**Metrics.** `shortlink_worker_messages_total{queue,result}` counts every
+settled delivery: `ack`; `nack` (requeued for one retry); `dlq` (nacked
+without requeue, so dead-lettered, including invalid events and messages that
+already failed once). A non-empty flush also records
+`shortlink_worker_click_batch_size`, `shortlink_worker_click_flush_duration_seconds`
+and `shortlink_worker_click_flush_total{result=ok|error}`. An empty flush
+records nothing. The notification consumer uses the same result values with
+`queue="notifications"` (a dropped `link.expiring` retry counts as `ack`).
+
 ### `DLQConsumer`
 
 `NewDLQConsumer(ch, queue, log)` consumes the queue it is given. The worker
 runs two: one on `clicks.dlq` and one on `notifications.dlq` (consumer tag is
 `<queue>-consumer`). Each logs every message that lands there at error level,
-with its body and routing key, then acknowledges it. Dead-lettered clicks are
+with its body, routing key and `request_id` (if the message has one), then acknowledges it. Dead-lettered clicks are
 **not** counted and dead-lettered notifications are **not** stored. The log
-line is the only trace, so alert on `dead-letter message received`.
+line is the only per-message trace. The consumers that nack count it as
+`shortlink_worker_messages_total{result="dlq"}`, and the `DeadLettered` alert
+fires on that counter; `DLQNotDraining` fires if the DLQ depth stays above 0.
 
 ## The notification consumer (`notification_consumer.go`)
 
@@ -137,6 +164,10 @@ only limits how many are in flight). `handle` settles each delivery:
    a redelivered one is logged and acked (dropped), because the expiry
    scanner publishes it again on its next scan while no row exists. Sending
    it to the DLQ would add a copy every scan until the link expires.
+
+**Logging.** Each stored notification logs one info line `notification stored`
+with `routing_key` and `request_id` (if any). The warn line for rejected
+events and the error line for failed inserts also carry `request_id`.
 
 ## Before you change it
 

@@ -58,7 +58,8 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    open http://localhost:8080/docs        # Swagger UI
    ```
 
-   The RabbitMQ management UI is at http://localhost:15672 (guest / guest).
+   The RabbitMQ management UI is at http://localhost:15672. Log in with
+   `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env` (`guest` / `guest` if unset).
 
 6. To use the admin API (`/api/admin/*`), set `ADMIN_EMAIL` and
    `ADMIN_PASSWORD` in `.env`, then:
@@ -68,6 +69,95 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
    ```
 
    For an account you already registered: `make admin-grant EMAIL=you@example.com`.
+
+### RabbitMQ credentials
+
+The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`,
+defaulting to `guest` / `guest` only when they are unset. `.env.example` has
+always set `shortlink` / `changeme_rabbit`, so an existing `.env` copied from it
+already has a user, and RabbitMQ will create that user, not `guest`, whenever
+it starts with an empty data volume. If your `.env` still has
+`RABBITMQ_URL=amqp://guest:guest@localhost:5672/`, change it to
+`amqp://<RABBITMQ_USER>:<RABBITMQ_PASSWORD>@localhost:5672/` so the URL uses
+the same user and password. Then recreate RabbitMQ. The `-V` matters: the image
+keeps its data in an anonymous volume, and RabbitMQ only creates the default
+user when that volume is empty, so a plain `--force-recreate` keeps the old
+user. Without a matching URL, `make run` silently drops events (the publisher
+stays disconnected) and `go run ./cmd/worker` exits.
+
+```bash
+docker compose up -d --force-recreate -V rabbitmq
+```
+
+### Run the app in containers
+
+Instead of `go run`, the server and worker can run in containers too (profile
+`app`). It runs the migrations, then starts both, with the in-network hosts
+and the keys from `./keys` mounted read-only. Needs `make keys` first. Stop host
+`make run` first, since both use port 8080. Published ports bind `127.0.0.1` only.
+
+```bash
+docker compose --profile app up -d --build --wait
+curl http://localhost:8080/healthz
+docker compose --profile app down        # stop (keeps the data volumes)
+```
+
+The containers run as uid 65532, so `keys/private.pem` must be readable by it
+(on Linux: `chmod 640` and `chown :65532`, as in the deploy steps below; Docker
+Desktop and OrbStack usually work as-is). Inside the containers `METRICS_PORT` is always 9100, whatever `.env` says. Both serve Prometheus
+metrics on port 9100 inside the compose network; it is not published to the host.
+
+### Observability stack (metrics, logs, alerts)
+
+`docker-compose.observability.yml` adds Prometheus, Alertmanager, Loki, Alloy,
+Grafana, cAdvisor and the MySQL/Redis exporters on top of the `app` profile.
+Needs `make keys` first and port 8080 free, like the section above.
+The full runbook (every metric, dashboard and alert, LogQL examples, known
+gaps, acceptance checklist) is [docs/observability.md](docs/observability.md).
+
+```bash
+make observe-check   # validate the Prometheus, Alertmanager and Alloy configs
+make observe         # build and start app + dependencies + stack, print the URLs
+make observe-down    # stop everything (keeps the data volumes)
+make load            # 5 min of mixed traffic through k6 (needs make observe running)
+```
+
+For empty metrics, logs and Grafana state, run `make observe-down`, then
+`docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data shorten-link_alertmanager_data`,
+then `make observe`. Do not use `down -v`: it also deletes `mysql_data`, your local database.
+
+`make load` runs `deploy/observability/k6/load.js` in a `grafana/k6` container on
+the compose network. It registers a throwaway user, creates 50 links, then ramps up
+to `RATE` requests/s (default 50) and holds it for `DURATION` (default 5m): 90% redirects
+(5% of them unknown codes, so 404), 8% `GET /api/links`, 2% `POST /api/links`. Each
+request sends a random `X-Real-IP` in `10.0.0.0/8`, so the per-IP limits act like many
+users. The user's daily quota (`quota_daily`, default set in `internal/service/auth_service.go`)
+runs out during long runs; those 429s are expected. The run fails (non-zero exit) if fewer than
+99% of checks pass (any 5xx or connection error fails one), if redirect p95 is 300 ms or more,
+or if k6 drops iterations because it cannot keep up with `RATE`.
+
+```bash
+RATE=100 DURATION=1m make load   # different rate / length
+SCENARIO=burst make load         # one IP at 5 req/s for 2 min: shows 429s and shortlink_ratelimit_rejected_total
+```
+
+- Grafana <http://localhost:3000>, user `admin`, password `GRAFANA_ADMIN_PASSWORD`
+  from `.env` (default `admin`). Loki logs are under Explore, e.g.
+  `{service="server"} | request_id="<X-Request-ID of a response>"`.
+- Dashboards (Grafana folder `shorten-link`, provisioned and read-only, JSON in
+  `deploy/observability/grafana/dashboards/`): Service overview, Worker and queues,
+  Dependencies and host, Logs (has a `request_id` box to trace one request).
+- Prometheus <http://localhost:9090> (targets, alert rules), Alertmanager
+  <http://localhost:9093> (firing alerts; locally there is no notification target).
+- Retention: `PROMETHEUS_RETENTION` (default `15d`) and `LOKI_RETENTION` (default `168h`).
+- Alert rules live in `deploy/observability/prometheus/rules/shortlink.yml`; thresholds
+  are starting values. `ExpiryScanStale` (900s) is 3 x the default `EXPIRY_SCAN_INTERVAL`.
+
+Known gaps: `external_labels.env` in `deploy/observability/prometheus/prometheus.yml`
+is hard-coded to `local` (Prometheus does not expand env vars there; change it on
+the VPS), and mysqld-exporter connects as MySQL `root` (on the VPS use a dedicated
+user with `PROCESS, REPLICATION CLIENT, SELECT`). On macOS (Docker Desktop,
+OrbStack) cAdvisor sees the Linux VM, so some container names may be partial.
 
 ### Tests
 

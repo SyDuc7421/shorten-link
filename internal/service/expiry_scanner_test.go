@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -132,5 +134,47 @@ func TestExpiryScanner_RunRejectsNonPositiveInterval(t *testing.T) {
 		if err := s.Run(context.Background(), d); err == nil {
 			t.Errorf("Run(%v) = nil, want error", d)
 		}
+	}
+}
+
+type errScanRepo struct{ service.NotificationRepository }
+
+func (errScanRepo) ExpiringLinks(context.Context, time.Time, time.Duration, int) ([]service.ExpiringLink, error) {
+	return nil, errors.New("db down")
+}
+
+func runScannerBriefly(t *testing.T, repo service.NotificationRepository) {
+	t.Helper()
+	s := service.NewExpiryScanner(repo, &recordingPub{}, zap.NewNop())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx, 10*time.Millisecond) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func TestExpiryScanner_RunRecordsScan(t *testing.T) {
+	okC := metrics.ExpiryScans.WithLabelValues("ok")
+	errC := metrics.ExpiryScans.WithLabelValues("error")
+
+	o0 := testutil.ToFloat64(okC)
+	runScannerBriefly(t, &scanRepo{})
+	if testutil.ToFloat64(okC)-o0 < 1 {
+		t.Error("want ExpiryScans{ok} >= 1")
+	}
+	if testutil.ToFloat64(metrics.ExpiryScanLastSuccess) <= 0 {
+		t.Error("want ExpiryScanLastSuccess > 0")
+	}
+
+	e0, o1 := testutil.ToFloat64(errC), testutil.ToFloat64(okC)
+	runScannerBriefly(t, errScanRepo{})
+	if testutil.ToFloat64(errC)-e0 < 1 {
+		t.Error("want ExpiryScans{error} >= 1")
+	}
+	if testutil.ToFloat64(okC) != o1 {
+		t.Error("failing scans must not count ok")
 	}
 }

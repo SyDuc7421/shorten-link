@@ -7,6 +7,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/internal/service"
 )
 
@@ -87,25 +88,31 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 	// Insert ignores shutdown: a delivery already taken finishes, so a
 	// cancelled ctx cannot fail it and push a redelivery to the DLQ.
 	if err := c.repo.Insert(context.WithoutCancel(ctx), n, evt.DedupeKey); err != nil {
-		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey))
+		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey), ridField(requestIDOf(d)))
 		// The expiry scanner publishes link.expiring again on its next scan
 		// while no row exists, so a second failure drops the event instead of
 		// adding a copy to the DLQ every scan.
 		if d.Redelivered && typ == service.NotificationLinkExpiring {
 			d.Ack(false) //nolint:errcheck
+			metrics.WorkerMessage(QueueNotifications, "ack", 1)
 			return
 		}
 		d.Nack(false, !d.Redelivered) //nolint:errcheck
+		metrics.WorkerMessage(QueueNotifications, nackResult(d), 1)
 		return
 	}
 	d.Ack(false) //nolint:errcheck
+	metrics.WorkerMessage(QueueNotifications, "ack", 1)
+	c.log.Info("notification stored", zap.String("routing_key", d.RoutingKey), ridField(requestIDOf(d)))
 }
 
 func (c *NotificationConsumer) reject(d amqp.Delivery, reason string) {
 	c.log.Warn("invalid notification event, discarding",
 		zap.String("reason", reason),
 		zap.String("routing_key", d.RoutingKey),
+		ridField(requestIDOf(d)),
 		zap.ByteString("body", d.Body),
 	)
 	d.Nack(false, false) //nolint:errcheck
+	metrics.WorkerMessage(QueueNotifications, "dlq", 1)
 }

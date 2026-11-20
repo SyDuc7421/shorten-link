@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kiến trúc shorten-link</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column; each section = short prose + one figure that shows the mechanism. Teal = hot path, amber = async/queue. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --fg: #142030;
+  --muted: #586a7c;
+  --line: #c5d0db;
+  --accent: #0a7a73;
+  --accent-soft: #dcefed;
+  --async: #b0570f;
+  --async-soft: #f7e8da;
+  --bad: #b3261e;
+  --bad-soft: #f8dedb;
+  --ok: #2c7a3a;
+  --ok-soft: #dcefe0;
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Be Vietnam Pro", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e151e; --surface: #16212d; --fg: #e3eaf1; --muted: #93a5b6; --line: #2e3d4d;
+    --accent: #3cc6bb; --accent-soft: #123a38; --async: #f0a35c; --async-soft: #3a2a1a;
+    --bad: #f2867e; --bad-soft: #3d1f1d; --ok: #7fd18e; --ok-soft: #1b3522;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e151e; --surface: #16212d; --fg: #e3eaf1; --muted: #93a5b6; --line: #2e3d4d;
+  --accent: #3cc6bb; --accent-soft: #123a38; --async: #f0a35c; --async-soft: #3a2a1a;
+  --bad: #f2867e; --bad-soft: #3d1f1d; --ok: #7fd18e; --ok-soft: #1b3522;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 16px/1.65 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 80px;
+}
+main { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+header { display: flex; flex-direction: column; gap: 12px; }
+.eyebrow { font: 500 12px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.2; }
+h1 { font-size: clamp(2rem, 5vw, 2.9rem); }
+h2 { font-size: 1.55rem; }
+h3 { font-size: 1.1rem; }
+p { margin: 0; max-width: 68ch; }
+.lead { font-size: 1.1rem; color: var(--muted); }
+section { display: flex; flex-direction: column; gap: 16px; }
+code, .mono { font-family: var(--font-mono); font-size: .88em; }
+p code, li code, td code { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+nav { display: flex; flex-wrap: wrap; gap: 8px; }
+nav a { font-size: 14px; color: var(--fg); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; background: var(--surface); }
+nav a:hover, nav a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.key { display: flex; flex-wrap: wrap; gap: 16px; font-size: 14px; color: var(--muted); }
+.key span { display: inline-flex; align-items: center; gap: 8px; }
+.swatch { width: 26px; height: 0; border-top: 2px solid var(--fg); display: inline-block; }
+.swatch.hot { border-color: var(--accent); border-top-width: 3px; }
+.swatch.async { border-color: var(--async); border-top-style: dashed; }
+.swatch.fail { border-color: var(--bad); border-top-style: dotted; border-top-width: 3px; }
+
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.scroll { overflow-x: auto; padding: 20px 16px 8px; }
+figure svg { display: block; width: 100%; height: auto; min-width: 640px; color: var(--fg); font-family: var(--font-body); }
+figcaption { padding: 12px 20px 16px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); }
+
+/* SVG parts, styled from page tokens */
+.n { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.n-hot { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.n-async { fill: var(--async-soft); stroke: var(--async); stroke-width: 1.5; }
+.n-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.5; }
+.n-ghost { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 5 4; }
+.t { fill: currentColor; font-size: 14px; font-weight: 600; }
+.ts { fill: var(--muted); font-size: 12px; }
+.tm { fill: var(--muted); font-size: 12px; font-family: var(--font-mono); }
+.tl { fill: currentColor; font-size: 12px; }
+.tl-hot { fill: var(--accent); font-size: 12px; font-weight: 600; }
+.tl-async { fill: var(--async); font-size: 12px; font-weight: 600; }
+.tl-bad { fill: var(--bad); font-size: 12px; font-weight: 600; }
+.e { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.e-hot { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+.e-async { fill: none; stroke: var(--async); stroke-width: 1.8; stroke-dasharray: 6 4; }
+.e-bad { fill: none; stroke: var(--bad); stroke-width: 1.8; stroke-dasharray: 2 4; }
+.m { fill: currentColor; }
+.m-hot { fill: var(--accent); }
+.m-async { fill: var(--async); }
+.m-bad { fill: var(--bad); }
+
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; background: var(--surface); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px/1.3 var(--font-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); background: var(--bg); }
+tr:last-child td { border-bottom: 0; }
+td:first-child { white-space: nowrap; }
+.pill { display: inline-block; font-size: 12.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.mid { background: var(--async-soft); color: var(--async); }
+
+ol.chain { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; counter-reset: c -1; }
+ol.chain li { counter-increment: c; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 10px 46px; position: relative; font-size: 14px; min-width: 0; }
+ol.chain li::before { content: counter(c); position: absolute; left: 12px; top: 10px; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 600 12px/24px var(--font-mono); text-align: center; }
+ol.chain b { display: block; font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+ol.chain span { color: var(--muted); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.note p { font-size: 14.5px; }
+ul { margin: 0; padding-left: 20px; max-width: 68ch; }
+li { margin: 2px 0; }
+footer { color: var(--muted); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="eyebrow">Go · MySQL · Redis · RabbitMQ</div>
+  <h1>Kiến trúc shorten-link</h1>
+  <p class="lead">Người dùng đăng ký và rút gọn URL dài thành mã kiểu <code>R7dwPCPmUa</code>. Ai mở link ngắn thì được chuyển hướng về URL gốc, còn mỗi lượt click được đếm ở chạy nền. Trang này đi theo đường đi của một request, từ ngoài vào trong.</p>
+  <nav aria-label="Mục lục">
+    <a href="#tong-quan">Tổng quan</a>
+    <a href="#redirect">Redirect</a>
+    <a href="#click">Đếm click</a>
+    <a href="#lop">Các lớp trong server</a>
+    <a href="#module">Module</a>
+    <a href="#du-lieu">Dữ liệu</a>
+    <a href="#su-co">Khi có sự cố</a>
+    <a href="#quan-sat">Quan sát</a>
+  </nav>
+  <div class="key" aria-label="Chú thích nét vẽ">
+    <span><i class="swatch hot"></i>đường nóng (redirect)</span>
+    <span><i class="swatch async"></i>bất đồng bộ qua hàng đợi</span>
+    <span><i class="swatch fail"></i>nhánh lỗi</span>
+    <span><i class="swatch"></i>gọi đồng bộ</span>
+  </div>
+</header>
+
+<!-- 1. Big picture -->
+<section id="tong-quan">
+  <div class="eyebrow">01 · Tổng quan</div>
+  <h2>Hai chương trình, ba dịch vụ phía sau</h2>
+  <p>Cùng một codebase build ra hai binary. <code>cmd/server</code> phục vụ API và redirect. <code>cmd/worker</code> đọc sự kiện từ RabbitMQ rồi ghi vào MySQL. Server không bao giờ chờ worker: mọi liên lạc giữa hai bên đều đi qua hàng đợi.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 860 430" role="img" aria-label="Request từ Internet qua nginx vào server. Server đọc ghi MySQL và Redis, publish sự kiện vào RabbitMQ. Worker consume từ RabbitMQ và ghi batch vào MySQL.">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a1h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="m-hot" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-async" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text class="t" x="330" y="22" text-anchor="middle">Internet</text>
+      <line class="e-hot" x1="330" y1="32" x2="330" y2="58" marker-end="url(#a1h)"/>
+
+      <rect class="n" x="230" y="62" width="200" height="56" rx="8"/>
+      <text class="t" x="330" y="86" text-anchor="middle">nginx</text>
+      <text class="ts" x="330" y="105" text-anchor="middle">TLS · 100 r/s/IP · body 2 MB</text>
+      <line class="e-hot" x1="330" y1="118" x2="330" y2="160" marker-end="url(#a1h)"/>
+      <text class="tl" x="340" y="144">đặt X-Real-IP</text>
+
+      <rect class="n-hot" x="230" y="164" width="200" height="60" rx="8"/>
+      <text class="t" x="330" y="190" text-anchor="middle">server</text>
+      <text class="tm" x="330" y="209" text-anchor="middle">cmd/server · :8080</text>
+
+      <rect class="n" x="40" y="320" width="170" height="56" rx="8"/>
+      <text class="t" x="125" y="344" text-anchor="middle">MySQL</text>
+      <text class="ts" x="125" y="363" text-anchor="middle">nguồn sự thật</text>
+
+      <rect class="n" x="250" y="320" width="170" height="56" rx="8"/>
+      <text class="t" x="335" y="344" text-anchor="middle">Redis</text>
+      <text class="ts" x="335" y="363" text-anchor="middle">cache · token · rate limit</text>
+
+      <rect class="n-async" x="560" y="164" width="190" height="60" rx="8"/>
+      <text class="t" x="655" y="190" text-anchor="middle">RabbitMQ</text>
+      <text class="tm" x="655" y="209" text-anchor="middle">exchange shortlink</text>
+
+      <rect class="n" x="560" y="320" width="190" height="56" rx="8"/>
+      <text class="t" x="655" y="344" text-anchor="middle">worker</text>
+      <text class="tm" x="655" y="363" text-anchor="middle">cmd/worker</text>
+
+      <path class="e" d="M260,224 L160,316" marker-end="url(#a1)"/>
+      <text class="tl" x="150" y="262">đọc / ghi</text>
+      <path class="e-hot" d="M335,224 L335,316" marker-end="url(#a1h)"/>
+      <text class="tl-hot" x="345" y="272">GET sl:&lt;code&gt;</text>
+
+      <line class="e-async" x1="430" y1="194" x2="556" y2="194" marker-end="url(#a1a)"/>
+      <text class="tl-async" x="493" y="184" text-anchor="middle">publish</text>
+      <text class="tm" x="493" y="214" text-anchor="middle">link.clicked …</text>
+
+      <line class="e-async" x1="640" y1="224" x2="640" y2="316" marker-end="url(#a1a)"/>
+      <text class="tl-async" x="632" y="268" text-anchor="end">consume</text>
+      <line class="e-async" x1="672" y1="320" x2="672" y2="228" marker-end="url(#a1a)"/>
+      <text class="tl-async" x="680" y="268">link.expiring</text>
+
+      <path class="e" d="M655,376 L655,408 L125,408 L125,380" marker-end="url(#a1)"/>
+      <text class="tl" x="390" y="400" text-anchor="middle">batch UPDATE clicks · lưu notifications</text>
+    </svg>
+    </div>
+    <figcaption>Server cũng gửi mail reset mật khẩu qua SMTP (hình không vẽ). Server chỉ publish lên RabbitMQ. Worker vừa consume vừa publish <code>link.expiring</code> khi quét các link sắp hết hạn.</figcaption>
+  </figure>
+</section>
+
+<!-- 2. Redirect -->
+<section id="redirect">
+  <div class="eyebrow">02 · Đường nóng</div>
+  <h2>Chuyện gì xảy ra khi mở <code>GET /{code}</code></h2>
+  <p>Đây là request quan trọng nhất: phải nhanh, và phải chạy được ngay cả khi một phần hệ thống chậm. Phần lớn redirect dừng ở Redis và không chạm tới MySQL. Lượt click được publish kiểu fire-and-forget nên redirect không chờ nó.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 900 340" role="img" aria-label="Request qua middleware và rate limit, tra Redis. Nếu hit thì trả 302 ngay. Nếu miss thì tra MySQL, ghi cache rồi trả 302; nếu không có hoặc hết hạn thì 404. Song song publish click vào RabbitMQ, không chờ.">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a2h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="m-hot" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-async" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a2b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-bad" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="n" x="20" y="50" width="120" height="56" rx="8"/>
+      <text class="t" x="80" y="74" text-anchor="middle">GET /R7dw…</text>
+      <text class="ts" x="80" y="93" text-anchor="middle">trình duyệt</text>
+
+      <rect class="n" x="180" y="50" width="160" height="56" rx="8"/>
+      <text class="t" x="260" y="74" text-anchor="middle">middleware</text>
+      <text class="ts" x="260" y="93" text-anchor="middle">rate limit 60/phút/IP</text>
+
+      <rect class="n-hot" x="380" y="50" width="170" height="56" rx="8"/>
+      <text class="t" x="465" y="74" text-anchor="middle">Redis</text>
+      <text class="tm" x="465" y="93" text-anchor="middle">GET sl:&lt;code&gt;</text>
+
+      <rect class="n-hot" x="720" y="50" width="160" height="56" rx="8"/>
+      <text class="t" x="800" y="74" text-anchor="middle">302 Found</text>
+      <text class="tm" x="800" y="93" text-anchor="middle">Location: URL gốc</text>
+
+      <line class="e-hot" x1="140" y1="78" x2="176" y2="78" marker-end="url(#a2h)"/>
+      <line class="e-hot" x1="340" y1="78" x2="376" y2="78" marker-end="url(#a2h)"/>
+      <line class="e-hot" x1="550" y1="78" x2="716" y2="78" marker-end="url(#a2h)"/>
+      <text class="tl-hot" x="633" y="68" text-anchor="middle">hit (đa số)</text>
+
+      <line class="e" x1="465" y1="106" x2="465" y2="176" marker-end="url(#a2)"/>
+      <text class="tl" x="475" y="146">miss</text>
+
+      <rect class="n" x="380" y="180" width="170" height="56" rx="8"/>
+      <text class="t" x="465" y="204" text-anchor="middle">MySQL</text>
+      <text class="tm" x="465" y="223" text-anchor="middle">SELECT … short_code=?</text>
+
+      <rect class="n" x="590" y="180" width="160" height="56" rx="8"/>
+      <text class="t" x="670" y="204" text-anchor="middle">ghi cache</text>
+      <text class="ts" x="670" y="223" text-anchor="middle">TTL ≤ 24h, ≤ expires_at</text>
+      <line class="e" x1="550" y1="208" x2="586" y2="208" marker-end="url(#a2)"/>
+      <path class="e" d="M750,208 L790,208 L790,110" marker-end="url(#a2)"/>
+
+      <line class="e-bad" x1="465" y1="236" x2="465" y2="282" marker-end="url(#a2b)"/>
+      <rect class="n-bad" x="400" y="286" width="130" height="40" rx="8"/>
+      <text class="t" x="465" y="311" text-anchor="middle">404 / 410</text>
+      <text class="tl-bad" x="390" y="264" text-anchor="end">không có · hết hạn · bị khóa</text>
+
+      <rect class="n-async" x="180" y="220" width="160" height="56" rx="8"/>
+      <text class="t" x="260" y="244" text-anchor="middle">publish click</text>
+      <text class="tm" x="260" y="263" text-anchor="middle">{"code":…} · 2s</text>
+      <path class="e-async" d="M260,106 L260,216" marker-end="url(#a2a)"/>
+      <text class="tl-async" x="250" y="160" text-anchor="end">không chờ</text>
+      <text class="tl-async" x="250" y="176" text-anchor="end">x-request-id</text>
+    </svg>
+    </div>
+    <figcaption>Hạn dùng được kiểm tra hai lần: TTL cache không bao giờ vượt quá <code>expires_at</code>, và nhánh MySQL kiểm tra <code>expires_at</code> trước khi redirect. RabbitMQ mà sập thì redirect vẫn chạy, chỉ mất lượt click đó.</figcaption>
+  </figure>
+</section>
+
+<!-- 3. Click counting -->
+<section id="click">
+  <div class="eyebrow">03 · Chạy nền</div>
+  <h2>Worker đếm click theo batch</h2>
+  <p>Nghìn click mỗi giây được gom lại thành vài lần ghi database. Worker lấy tối đa 500 sự kiện, hoặc bao nhiêu sự kiện tới trong 2 giây, cộng dồn theo mã, rồi ghi tất cả trong một transaction duy nhất.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 900 290" role="img" aria-label="Queue clicks vào ClickConsumer, gom tối đa 500 hoặc 2 giây, cộng theo mã, một transaction MySQL, thành công thì ack. Thất bại thì thử lại một lần, lần hai thất bại thì vào clicks.dlq và DLQConsumer ghi log.">
+      <defs>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-async" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-bad" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="n-async" x="20" y="40" width="140" height="60" rx="8"/>
+      <text class="t" x="90" y="66" text-anchor="middle">queue clicks</text>
+      <text class="tm" x="90" y="85" text-anchor="middle">← link.clicked</text>
+
+      <rect class="n" x="200" y="40" width="160" height="60" rx="8"/>
+      <text class="t" x="280" y="66" text-anchor="middle">ClickConsumer</text>
+      <text class="ts" x="280" y="85" text-anchor="middle">≤ 500 sự kiện / 2s</text>
+
+      <rect class="n" x="400" y="40" width="170" height="60" rx="8"/>
+      <text class="t" x="485" y="66" text-anchor="middle">cộng theo mã</text>
+      <text class="tm" x="485" y="85" text-anchor="middle">{R7dw…: 37, Kp3x…: 4}</text>
+
+      <rect class="n" x="610" y="40" width="170" height="60" rx="8"/>
+      <text class="t" x="695" y="66" text-anchor="middle">1 transaction</text>
+      <text class="ts" x="695" y="85" text-anchor="middle">links + analytics_daily</text>
+
+      <rect class="n" x="820" y="48" width="64" height="44" rx="8"/>
+      <text class="t" x="852" y="75" text-anchor="middle">ack</text>
+
+      <line class="e-async" x1="160" y1="70" x2="196" y2="70" marker-end="url(#a3a)"/>
+      <line class="e" x1="360" y1="70" x2="396" y2="70" marker-end="url(#a3)"/>
+      <line class="e" x1="570" y1="70" x2="606" y2="70" marker-end="url(#a3)"/>
+      <line class="e" x1="780" y1="70" x2="816" y2="70" marker-end="url(#a3)"/>
+      <text class="tl" x="798" y="60" text-anchor="middle">ok</text>
+
+      <line class="e-bad" x1="695" y1="100" x2="695" y2="156" marker-end="url(#a3b)"/>
+      <text class="tl-bad" x="705" y="132">lỗi</text>
+      <rect class="n" x="610" y="160" width="170" height="50" rx="8"/>
+      <text class="t" x="695" y="190" text-anchor="middle">thử lại 1 lần</text>
+
+      <path class="e-bad" d="M610,185 L524,185" marker-end="url(#a3b)"/>
+      <text class="tl-bad" x="567" y="175" text-anchor="middle">lỗi lần 2</text>
+      <rect class="n-bad" x="380" y="160" width="140" height="50" rx="8"/>
+      <text class="t" x="450" y="183" text-anchor="middle">clicks.dlq</text>
+      <text class="tm" x="450" y="200" text-anchor="middle">via shortlink.dlx</text>
+
+      <line class="e-bad" x1="380" y1="185" x2="324" y2="185" marker-end="url(#a3b)"/>
+      <rect class="n" x="160" y="160" width="160" height="50" rx="8"/>
+      <text class="t" x="240" y="183" text-anchor="middle">DLQConsumer</text>
+      <text class="ts" x="240" y="200" text-anchor="middle">ghi log + ack</text>
+
+      <text class="ts" x="20" y="250">Mã được sắp xếp trước khi UPDATE để hai batch song song không deadlock.</text>
+      <text class="ts" x="20" y="270">Batch lỗi thì worker ghi log request_ids của các message trong batch, để lần theo trong Loki.</text>
+    </svg>
+    </div>
+    <figcaption>Queue <code>notifications</code> chạy theo đúng mô hình đó: lỗi thì thử lại một lần, rồi chuyển vào <code>notifications.dlq</code>. Alert <code>DeadLettered</code> bắn khi số message bị đẩy sang dead-letter (<code>result="dlq"</code>) tăng trong 10 phút.</figcaption>
+  </figure>
+</section>
+
+<!-- 4. Layers -->
+<section id="lop">
+  <div class="eyebrow">04 · Bên trong server</div>
+  <h2>Ba lớp, interface nằm ở phía dùng</h2>
+  <p>Mỗi lớp chỉ biết lớp ngay dưới nó, qua interface nhỏ. Interface được khai báo ở package <em>dùng</em> nó, không phải package hiện thực nó. Vì vậy <code>service</code> không import <code>repository</code>, và test có thể thay bằng mock viết tay. Chỉ <code>cmd/server</code> và <code>cmd/worker</code> biết mọi package, vì đó là nơi lắp kiểu cụ thể vào interface.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 900 330" role="img" aria-label="Request đi qua middleware, handler, service, rồi repository và messaging. Handler khai báo interface LinkServicer mà service hiện thực. Service khai báo LinkRepository và LinkCache mà repository hiện thực. cmd/server lắp các kiểu cụ thể vào.">
+      <defs>
+        <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a4h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="m-hot" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <text class="ts" x="150" y="20" text-anchor="middle">HTTP request</text>
+      <line class="e-hot" x1="150" y1="28" x2="150" y2="44" marker-end="url(#a4h)"/>
+
+      <rect class="n" x="40" y="48" width="220" height="50" rx="8"/>
+      <text class="t" x="150" y="70" text-anchor="middle">middleware/</text>
+      <text class="ts" x="150" y="88" text-anchor="middle">auth · limit · header · log</text>
+      <line class="e-hot" x1="150" y1="98" x2="150" y2="116" marker-end="url(#a4h)"/>
+
+      <rect class="n" x="40" y="120" width="220" height="50" rx="8"/>
+      <text class="t" x="150" y="142" text-anchor="middle">handler/</text>
+      <text class="ts" x="150" y="160" text-anchor="middle">parse JSON · lỗi → HTTP status</text>
+      <line class="e-hot" x1="150" y1="170" x2="150" y2="188" marker-end="url(#a4h)"/>
+
+      <rect class="n" x="40" y="192" width="220" height="50" rx="8"/>
+      <text class="t" x="150" y="214" text-anchor="middle">service/</text>
+      <text class="ts" x="150" y="232" text-anchor="middle">luật nghiệp vụ · SSRF · lockout</text>
+      <line class="e-hot" x1="150" y1="242" x2="150" y2="260" marker-end="url(#a4h)"/>
+
+      <rect class="n" x="40" y="264" width="220" height="50" rx="8"/>
+      <text class="t" x="150" y="286" text-anchor="middle">repository/ · messaging/</text>
+      <text class="ts" x="150" y="304" text-anchor="middle">MySQL · Redis · RabbitMQ</text>
+
+      <!-- interface declarations -->
+      <rect class="n-ghost" x="340" y="120" width="210" height="50" rx="8"/>
+      <text class="t" x="445" y="142" text-anchor="middle">LinkServicer</text>
+      <text class="ts" x="445" y="160" text-anchor="middle">khai báo trong handler</text>
+      <line class="e" x1="260" y1="145" x2="336" y2="145" marker-end="url(#a4)"/>
+      <text class="tl" x="298" y="137" text-anchor="middle">dùng</text>
+
+      <rect class="n-ghost" x="340" y="192" width="210" height="50" rx="8"/>
+      <text class="t" x="445" y="214" text-anchor="middle">LinkRepository, LinkCache…</text>
+      <text class="ts" x="445" y="232" text-anchor="middle">khai báo trong service</text>
+      <line class="e" x1="260" y1="217" x2="336" y2="217" marker-end="url(#a4)"/>
+      <text class="tl" x="298" y="209" text-anchor="middle">dùng</text>
+
+      <path class="e" d="M205,192 C 260,182 300,172 336,165" marker-end="url(#a4)" stroke-dasharray="4 3"/>
+      <text class="tl" x="305" y="186" text-anchor="middle">hiện thực</text>
+      <path class="e" d="M205,264 C 270,256 300,246 336,238" marker-end="url(#a4)" stroke-dasharray="4 3"/>
+      <text class="tl" x="305" y="262" text-anchor="middle">hiện thực</text>
+
+      <rect class="n-hot" x="640" y="150" width="220" height="70" rx="8"/>
+      <text class="t" x="750" y="178" text-anchor="middle">cmd/server · main.go</text>
+      <text class="ts" x="750" y="198" text-anchor="middle">tạo kiểu cụ thể,</text>
+      <text class="ts" x="750" y="213" text-anchor="middle">cắm vào interface</text>
+      <path class="e" d="M640,175 L554,150" marker-end="url(#a4)"/>
+      <path class="e" d="M640,195 L554,215" marker-end="url(#a4)"/>
+      <text class="tl" x="600" y="140" text-anchor="middle">wire</text>
+    </svg>
+    </div>
+    <figcaption>Mũi tên liền là "gọi qua interface", mũi tên đứt là "hiện thực interface đó". Phụ thuộc luôn chỉ vào trong. Không có mũi tên nào đi từ <code>service</code> sang <code>repository</code>.</figcaption>
+  </figure>
+
+  <h3>Chuỗi middleware, từ ngoài vào trong</h3>
+  <p>Thứ tự có ý nghĩa: <code>metrics.Middleware</code> nằm ngoài cùng nên request bị timeout vẫn được đếm là 503 với đúng route. <code>metrics.RecordRoute</code> nằm giữa bước 1 và 2, báo cho bước 0 biết pattern nào đã khớp.</p>
+  <ol class="chain">
+    <li><b>metrics.Middleware</b><span>đếm và đo thời gian theo method, route, status</span></li>
+    <li><b>http.TimeoutHandler</b><span>cắt request quá 10s</span></li>
+    <li><b>SecureHeaders</b><span>HSTS, CSP, X-Frame-Options, nosniff</span></li>
+    <li><b>CORS</b><span>chỉ cho origin trong <code>ALLOWED_ORIGINS</code></span></li>
+    <li><b>JWTAuth</b><span>Bearer hợp lệ → user ID vào context</span></li>
+    <li><b>RequestID</b><span>nhận <code>X-Request-ID</code> hợp lệ hoặc tạo mới</span></li>
+    <li><b>AccessLog</b><span>một dòng log mỗi request</span></li>
+    <li><b>Recover</b><span>panic → log kèm stack + JSON 500</span></li>
+    <li><b>MaxBodySize</b><span>body quá 1 MB → 413</span></li>
+    <li><b>RateLimit</b><span>sliding window theo IP trên Redis → 429</span></li>
+    <li><b>RequireAuth</b><span>route cần đăng nhập → 401</span></li>
+    <li><b>RequireAdmin</b><span><code>/api/admin/*</code>, đọc MySQL mỗi request → 403</span></li>
+  </ol>
+</section>
+
+<!-- 5. Modules -->
+<section id="module">
+  <div class="eyebrow">05 · Module</div>
+  <h2>Từng package làm gì</h2>
+  <p>Mỗi package có trang riêng trong <code>docs/modules/</code>. Thứ tự dưới đây đi theo một request từ ngoài vào trong, nên đọc lần lượt là dễ hiểu nhất.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Package</th><th>Trách nhiệm</th><th>Đọc file này trước</th></tr></thead>
+    <tbody>
+      <tr><td><code>cmd/server</code></td><td>Lắp mọi thứ: config, client, chuỗi middleware, rate limit, tắt êm</td><td><code>main.go</code></td></tr>
+      <tr><td><code>internal/middleware</code></td><td>Code chạy quanh mọi request (bảng ở trên)</td><td><code>ratelimit.go</code></td></tr>
+      <tr><td><code>internal/handler</code></td><td>HTTP → lời gọi service, lỗi service → status code</td><td><code>link.go</code></td></tr>
+      <tr><td><code>internal/service</code></td><td>Luật nghiệp vụ cho link, tài khoản, token, admin, thông báo; khai báo interface nó cần</td><td><code>link_service.go</code>, <code>auth_service.go</code></td></tr>
+      <tr><td><code>internal/repository</code></td><td>Hiện thực MySQL (<code>*_mysql.go</code>) và Redis (<code>*_redis.go</code>)</td><td><code>link_mysql.go</code></td></tr>
+      <tr><td><code>internal/messaging</code></td><td>Topology RabbitMQ, publisher tự kết nối lại, consumer click, notification và DLQ</td><td><code>setup.go</code></td></tr>
+      <tr><td><code>cmd/worker</code></td><td>Chương trình thứ hai: chạy các consumer và bộ quét link sắp hết hạn</td><td><code>main.go</code></td></tr>
+      <tr><td><code>internal/mail</code></td><td>Mail reset mật khẩu qua SMTP, hoặc ra log khi <code>SMTP_HOST</code> rỗng</td><td><code>mail.go</code></td></tr>
+      <tr><td><code>config</code></td><td>Đọc biến môi trường, mở kết nối MySQL/Redis/RabbitMQ, nạp khóa RSA</td><td><code>config.go</code></td></tr>
+      <tr><td><code>pkg/idgen</code></td><td>Snowflake ID + Base62: ID chính là short code</td><td><code>idgen.go</code></td></tr>
+      <tr><td><code>internal/metrics</code></td><td>Registry Prometheus, mọi metric <code>shortlink_*</code>, listener <code>/metrics</code> trên <code>METRICS_PORT</code></td><td><code>metrics.go</code></td></tr>
+      <tr><td><code>internal/ctxkey</code>, <code>logger</code></td><td>Key context có kiểu (user ID, request ID), logger zap lưu trong context</td><td>—</td></tr>
+      <tr><td><code>deploy/</code></td><td>Migration SQL, cấu hình nginx, stack observability (Prometheus, Loki, Grafana, k6)</td><td><code>prometheus/rules/shortlink.yml</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="cols">
+    <div class="note">
+      <h3>Short code sinh ra thế nào</h3>
+      <p>Không dùng chuỗi ngẫu nhiên. <code>idgen</code> tạo Snowflake ID 64 bit gồm số mili giây từ 2024-01-01, node ID (0–1023) và số thứ tự (0–4095), rồi viết ở Base62 ra mã 10 ký tự. Mã chỉ duy nhất khi mỗi instance server có <code>NODE_ID</code> khác nhau.</p>
+    </div>
+    <div class="note">
+      <h3>Xác thực</h3>
+      <p>Access token là JWT RS256 sống 15 phút, kiểm tra bằng public key mà không cần tra DB. Refresh token sống 7 ngày; <code>jti</code> của nó nằm trong Redis và bị <code>GETDEL</code> khi refresh, nên mỗi token chỉ dùng được một lần. Sai mật khẩu 5 lần thì email bị khóa 15 phút.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 6. Data -->
+<section id="du-lieu">
+  <div class="eyebrow">06 · Dữ liệu</div>
+  <h2>Dữ liệu nằm ở đâu</h2>
+  <div class="cols">
+    <div class="note">
+      <h3>MySQL: nguồn sự thật</h3>
+      <ul>
+        <li><code>users</code>: email, password_hash, role, quota_daily, disabled_at</li>
+        <li><code>links</code>: short_code (unique, utf8mb4_bin), original_url, clicks, expires_at</li>
+        <li><code>analytics_daily</code>: click theo link theo ngày UTC</li>
+        <li><code>audit_log</code>: mỗi thao tác admin một dòng</li>
+        <li><code>notifications</code>: thông báo trong app, worker ghi</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Redis: tra nhanh, sống ngắn</h3>
+      <ul>
+        <li><code>sl:&lt;code&gt;</code>: URL gốc, ≤ 24h</li>
+        <li><code>rt:&lt;jti&gt;</code>, <code>urt:</code>, <code>urv:</code>: phiên đăng nhập</li>
+        <li><code>lockout:&lt;email&gt;</code>: số lần sai</li>
+        <li><code>prt*:</code>: token reset mật khẩu, cooldown</li>
+        <li><code>rl:&lt;action&gt;:&lt;ip&gt;</code>: cửa sổ rate limit</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>RabbitMQ: tách "bấm" khỏi "ghi"</h3>
+      <ul>
+        <li>Exchange topic <code>shortlink</code></li>
+        <li><code>clicks</code> ← <code>link.clicked</code></li>
+        <li><code>notifications</code> ← disabled, enabled, expiring, password_changed</li>
+        <li><code>shortlink.dlx</code> → <code>clicks.dlq</code>, <code>notifications.dlq</code></li>
+        <li><code>link.created</code> chưa có consumer</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 7. Failures -->
+<section id="su-co">
+  <div class="eyebrow">07 · Khi có sự cố</div>
+  <h2>Một phần chết thì phần nào còn sống</h2>
+  <p>Đọc theo hàng: dịch vụ đó sập thì từng tính năng ra sao. Server không cần RabbitMQ để khởi động: publisher tự thử kết nối lại mỗi 2s. Worker thì thoát khi mất RabbitMQ, rồi được Docker khởi động lại.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Sập</th><th>Redirect</th><th>Tạo / liệt kê link</th><th>Đăng nhập</th><th>Đếm click</th></tr></thead>
+    <tbody>
+      <tr><td><b>Redis</b></td><td><span class="pill ok">chạy</span> từ MySQL, không rate limit</td><td><span class="pill ok">chạy</span></td><td><span class="pill bad">lỗi</span> token nằm ở Redis</td><td><span class="pill ok">có</span></td></tr>
+      <tr><td><b>MySQL</b></td><td><span class="pill mid">chỉ link đã cache</span></td><td><span class="pill bad">lỗi</span></td><td><span class="pill bad">lỗi</span></td><td><span class="pill bad">không</span> thử lại rồi DLQ</td></tr>
+      <tr><td><b>RabbitMQ</b></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill bad">mất</span> trong khoảng đó</td></tr>
+      <tr><td><b>worker</b></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill mid">trễ</span> queue dồn lên</td></tr>
+      <tr><td><b>Stack quan sát</b></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">chạy</span></td><td><span class="pill ok">có</span> chỉ mất metric/log</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><code>/healthz</code> trả 503 nếu một trong MySQL, Redis, RabbitMQ không kết nối được.</p>
+</section>
+
+<!-- 8. Observability -->
+<section id="quan-sat">
+  <div class="eyebrow">08 · Quan sát (chỉ local)</div>
+  <h2>Metric được kéo về, log được đẩy đi</h2>
+  <p><code>make observe</code> chạy server, worker và stack quan sát trong container. App không kết nối tới thành phần nào của stack: Prometheus tự kéo metric từ cổng <code>/metrics</code> riêng, còn log JSON in ra stdout được Alloy gom đi. Vì vậy stack có sập thì request cũng không bị ảnh hưởng.</p>
+  <figure>
+    <div class="scroll">
+    <svg viewBox="0 0 900 300" role="img" aria-label="Prometheus scrape cổng 9100 của server và worker cùng các exporter, gửi alert tới Alertmanager. Log stdout của container đi qua Alloy vào Loki. Grafana đọc cả Prometheus và Loki.">
+      <defs>
+        <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m" d="M0,0 L10,5 L0,10 z"/></marker>
+        <marker id="a5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="m-async" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="n-hot" x="20" y="30" width="190" height="56" rx="8"/>
+      <text class="t" x="115" y="54" text-anchor="middle">server · worker</text>
+      <text class="tm" x="115" y="73" text-anchor="middle">:9100 /metrics</text>
+
+      <rect class="n" x="20" y="110" width="190" height="56" rx="8"/>
+      <text class="t" x="115" y="134" text-anchor="middle">exporter</text>
+      <text class="ts" x="115" y="153" text-anchor="middle">MySQL · Redis · RabbitMQ · cAdvisor</text>
+
+      <rect class="n" x="330" y="64" width="180" height="60" rx="8"/>
+      <text class="t" x="420" y="90" text-anchor="middle">Prometheus</text>
+      <text class="tm" x="420" y="109" text-anchor="middle">:9090 · giữ 15d</text>
+
+      <path class="e" d="M326,86 L214,58" marker-end="url(#a5)"/>
+      <path class="e" d="M326,104 L214,138" marker-end="url(#a5)"/>
+      <text class="tl" x="270" y="95" text-anchor="middle">scrape 15s</text>
+
+      <rect class="n" x="640" y="20" width="200" height="56" rx="8"/>
+      <text class="t" x="740" y="44" text-anchor="middle">Alertmanager</text>
+      <text class="tm" x="740" y="63" text-anchor="middle">:9093 · 9 rule</text>
+      <path class="e" d="M510,82 L636,52" marker-end="url(#a5)"/>
+      <text class="tl" x="570" y="56" text-anchor="middle">alert</text>
+
+      <rect class="n-hot" x="640" y="140" width="200" height="56" rx="8"/>
+      <text class="t" x="740" y="164" text-anchor="middle">Grafana</text>
+      <text class="tm" x="740" y="183" text-anchor="middle">:3000 · dashboard có sẵn</text>
+      <path class="e" d="M510,110 L636,158" marker-end="url(#a5)"/>
+      <text class="tl" x="580" y="122" text-anchor="middle">PromQL</text>
+
+      <rect class="n" x="20" y="220" width="190" height="56" rx="8"/>
+      <text class="t" x="115" y="244" text-anchor="middle">stdout container</text>
+      <text class="ts" x="115" y="263" text-anchor="middle">log JSON (zap)</text>
+
+      <rect class="n-async" x="250" y="220" width="150" height="56" rx="8"/>
+      <text class="t" x="325" y="244" text-anchor="middle">Alloy</text>
+      <text class="ts" x="325" y="263" text-anchor="middle">tách level, request_id</text>
+
+      <rect class="n-async" x="440" y="220" width="150" height="56" rx="8"/>
+      <text class="t" x="515" y="244" text-anchor="middle">Loki</text>
+      <text class="tm" x="515" y="263" text-anchor="middle">giữ 7d</text>
+
+      <line class="e-async" x1="210" y1="248" x2="246" y2="248" marker-end="url(#a5a)"/>
+      <line class="e-async" x1="400" y1="248" x2="436" y2="248" marker-end="url(#a5a)"/>
+      <path class="e" d="M590,240 L660,200" marker-end="url(#a5)"/>
+      <text class="tl" x="640" y="236">LogQL</text>
+    </svg>
+    </div>
+    <figcaption>Label Loki chỉ có <code>service</code>, <code>container</code>, <code>level</code>, <code>env</code>; <code>request_id</code> nằm ở structured metadata. Không bao giờ dùng short code, user ID hay raw path làm label, để số series không phình ra. Tìm một <code>request_id</code> trong Loki sẽ thấy cả dòng log của server lẫn của worker.</figcaption>
+  </figure>
+</section>
+
+<footer>Bản vẽ của <code>docs/architect.md</code> và <code>docs/modules/</code>. Khi code đổi, sửa các file đó trước rồi cập nhật trang này trong cùng commit.</footer>
+</main>
+</body>
+</html>

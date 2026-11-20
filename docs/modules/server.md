@@ -41,8 +41,9 @@ exits and Docker restarts it.
 | 8 | `PASSWORD_RESET_URL` is parsed and checked. The mailer is SMTP when `SMTP_HOST` is set, otherwise log-only, which is allowed only when the reset URL is on localhost | fatal |
 | 9 | Repositories → services → handlers are constructed (including `AdminService`, which `RequireAdmin` also uses, and `NotificationService` for `/api/notifications`) | — |
 | 10 | Routes are registered on one `http.ServeMux` (the notification routes sit behind `RequireAuth` and have no extra rate limit) | — |
-| 11 | The mux is wrapped in rate limits, then in the middleware chain | — |
-| 12 | `ListenAndServe` starts in a goroutine | fatal |
+| 11 | The mux is wrapped in rate limits, then in the middleware chain, which starts with `metrics.Middleware`, `TimeoutHandler` and `metrics.RecordRoute` | — |
+| 12 | `metrics.Serve` binds the `/metrics` port when `METRICS_PORT` is not `0` | fatal if the port cannot be bound |
+| 13 | `ListenAndServe` starts in a goroutine | fatal |
 
 RabbitMQ is the only dependency the server can start without. Redirects and link
 creation must keep working when the click pipeline is down. Click counting is
@@ -53,25 +54,35 @@ creation must keep working when the click pipeline is down. Click counting is
 Every request passes through these layers, outermost first:
 
 ```
-http.TimeoutHandler (10 s)          → 503 {"error":"request timeout"} if a handler is too slow
-  SecureHeaders                     → security headers on every response
-    CORS                            → answers preflight, adds CORS headers for allowed origins
-      JWTAuth                       → if a valid Bearer token is present, puts the user ID in the context
-        RequestID                   → X-Request-ID header + request-scoped logger
-          AccessLog                 → one "request" log line per request, after it finishes
-            Recover                 → handler panic → logged error + 500 {"error":"internal server error"}
-              MaxBodySize (1 MB)    → caps the request body
-                withRateLimits      → per-IP limits on selected routes
-                  ServeMux          → the route handlers
+metrics.Middleware                      → counts and times the request (method, route pattern, status)
+  http.TimeoutHandler (10 s)            → 503 {"error":"request timeout"} if a handler is too slow
+    metrics.RecordRoute                 → stores the matched mux pattern for metrics.Middleware
+      SecureHeaders                     → security headers on every response
+        CORS                            → answers preflight, adds CORS headers for allowed origins
+          JWTAuth                       → if a valid Bearer token is present, puts the user ID in the context
+            RequestID                   → X-Request-ID header + request-scoped logger
+              AccessLog                 → one "request" log line per request, after it finishes
+                Recover                 → handler panic → logged error + 500 {"error":"internal server error"}
+                  MaxBodySize (1 MB)    → caps the request body
+                    withRateLimits      → per-IP limits on selected routes
+                      ServeMux          → the route handlers
 ```
 
 Two details that surprise people:
 
+- **The route label comes from the mux.** `metrics.RecordRoute(mux, next)`
+  sits just inside `TimeoutHandler`. It asks the mux which pattern the request
+  matches (for example `GET /{code}`), hands it back to `metrics.Middleware`
+  through the request context, then calls the rest of the chain. Because it runs
+  before `CORS`, `MaxBodySize` and the rate limiter, their 413 and 429 answers
+  keep their route too. Unmatched requests are labelled `unmatched`, so unknown
+  short codes never create a series each.
 - **`JWTAuth` never rejects a request.** A missing or invalid token only means
   "no user in the context". Rejection happens later, in `RequireAuth`, which
   wraps only the protected routes. See [middleware.md](middleware.md).
-- **The order matters.** The timeout is outermost so it also bounds slow
-  middleware. Rate limiting is innermost so a 429 still carries the security
+- **The order matters.** `metrics.Middleware` is outermost so a request that
+  `TimeoutHandler` cuts off is still counted, as `503`. The timeout comes next
+  so it also bounds slow middleware. Rate limiting is innermost so a 429 still carries the security
   headers and the request ID.
 
 ## Rate limits

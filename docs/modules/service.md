@@ -87,6 +87,8 @@ exactly one attempt and the error goes back to the user as `409`.
 
 After a successful insert, the cache is warmed with the URL (TTL 24 h, or less
 if the link expires sooner), and a `link.created` event is published.
+`shortlink_links_created_total` is incremented only after the insert succeeded,
+so rejected requests are not counted.
 
 ### Following a link: `Resolve`
 
@@ -99,6 +101,14 @@ if the link expires sooner), and a `link.created` event is published.
    clicks on a disabled, often abusive, link from each querying MySQL. If the
    link has expired, return `ErrNotFound`. Otherwise warm the cache, publish
    `link.clicked` and return.
+
+**Metrics.** `Resolve` counts every cache lookup in
+`shortlink_link_cache_requests_total{result}`: `hit` (any value, including the
+`!disabled` marker), `miss` (`ErrNotFound`) or `error` (Redis failed; the
+lookup then falls back to MySQL). A deferred function over the named error
+return counts the final outcome in `shortlink_redirects_total{outcome}`:
+`found` (nil), `not_found`, `disabled` or `error`. Neither uses the short code
+as a label.
 
 No click is published for a disabled link. Whoever disables or enables a link
 or a user must delete the affected cache keys (see `AdminService`), otherwise
@@ -150,6 +160,11 @@ plan with a daily quota of 100, and a token pair is issued.
    token pair. The disabled check comes after the password check on purpose:
    only someone who knows the password learns that the account is disabled.
 
+**Metrics.** `Login` is a thin wrapper that counts the result in
+`shortlink_auth_logins_total{result}`: `ok`, `locked` (`ErrAccountLocked`) or
+`fail` (`ErrInvalidCredentials`, `ErrAccountDisabled`). Any other error (Redis
+or MySQL down) is counted as `error`, so it does not look like a wrong password.
+
 **Why the dummy hash?** Without it, a login for an unknown email would return
 almost instantly, while a real email would take ~0.25 s for bcrypt. That
 timing difference would tell an attacker which emails are registered. Unknown
@@ -187,6 +202,15 @@ refresh token can never be created after the reset that was meant to end it.
 `ParseAccessToken` is what `middleware.JWTAuth` calls. It accepts only RSA
 signatures, which blocks the classic "change the algorithm to `none`/HMAC"
 attack.
+
+### Request ID on published events
+
+Both `publishAsync` helpers (the function in `publish.go` and the
+`LinkService` method) read the request ID from the request context **before**
+starting the goroutine, then put it on the fresh publish context. The
+publisher turns it into the `x-request-id` message header, so a click or
+notification can be traced back to the request that caused it. `Shorten` and
+`Resolve` pass their request context to the method for this reason.
 
 ### Password reset
 
@@ -347,6 +371,8 @@ returns an error only when the repository query fails.
 
 `Run(ctx, interval)` scans once right away, then on every tick, until `ctx` is
 cancelled, and returns nil. A scan error is logged and the loop keeps going.
+After each scan, `Run` adds `shortlink_worker_expiry_scan_total{result}` and,
+on success, sets the last-success timestamp gauge.
 Known gap: if more than 500 links qualify, the rest wait for later scans.
 
 ## Before you change it

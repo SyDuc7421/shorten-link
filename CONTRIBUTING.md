@@ -8,7 +8,7 @@ How people and AI coding agents work on this codebase. Read
 
 ## 1. Set up
 
-**You need:** Go 1.26+ (go.mod pins toolchain 1.26.10; `GOTOOLCHAIN=auto` downloads it), Docker (for local services and integration tests),
+**You need:** Go 1.26+ (go.mod pins toolchain 1.26.11; `GOTOOLCHAIN=auto` downloads it), Docker (for local services and integration tests),
 `openssl`, and optionally `golang-migrate` and `golangci-lint`.
 
 ```bash
@@ -113,6 +113,7 @@ should reject a change that leaves a page saying something false.
 | An environment variable | `.env.example` (with a comment) and [docs/modules/config.md](docs/modules/config.md) |
 | A migration | [docs/modules/database.md](docs/modules/database.md) |
 | How to run or deploy | [README.md](README.md) and [docs/deploy.md](docs/deploy.md) |
+| How components talk (a new service, queue, data store or request path) | [docs/architect.md](docs/architect.md) and the matching drawing in [docs/architecture.html](docs/architecture.html) |
 
 Write for someone new to the codebase: say what a thing does and **why** it
 is built that way, in plain sentences. Describe the code as it is, including

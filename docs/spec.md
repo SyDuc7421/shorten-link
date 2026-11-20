@@ -89,7 +89,7 @@ WAF, captcha, payments.
 |---|---|---|
 | FR-O1 | `GET /healthz` reports MySQL, Redis, RabbitMQ status; 503 if any is down | ✅ |
 | FR-O2 | Separate liveness (process up) and readiness (dependencies up) probes | ❌ one endpoint does both |
-| FR-O3 | `GET /metrics` in Prometheus format, internal only | ❌ nginx already blocks the path; app does not serve it |
+| FR-O3 | `GET /metrics` in Prometheus format, internal only | ✅ served on a separate port (`METRICS_PORT`, off by default, 9100 in compose), never on the API port; nginx also blocks `/metrics`. See [observability.md](observability.md) |
 | FR-O4 | API documented in OpenAPI and browsable at `/docs` | ✅ |
 
 ---
@@ -119,7 +119,7 @@ WAF, captcha, payments.
 | NFR-S7 | Slow-client protection (header/read/write/idle timeouts) | ✅ |
 | NFR-S8 | Secrets come from env/volumes, never committed | ✅ `.env`, `keys/` git-ignored |
 | NFR-S9 | JWT signing key can be rotated without logging everyone out (`kid`) | ❌ |
-| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.10, 0 reachable findings; enforced in CI |
+| NFR-S10 | Dependencies and Go toolchain free of known vulnerabilities | ✅ toolchain 1.26.11, 0 reachable findings; enforced in CI |
 | NFR-S11 | Redis and RabbitMQ require authentication in production | ✅ prod compose refuses to start without `REDIS_PASSWORD` / `RABBITMQ_*` |
 | NFR-S12 | Audit trail for security-relevant actions | ⚠️ every admin action is in `audit_log` (same transaction); logins, password resets and user actions are not |
 
@@ -152,8 +152,8 @@ WAF, captcha, payments.
 | ID | Requirement | Status |
 |---|---|---|
 | NFR-OB1 | Structured JSON logs with request ID | ✅ `AccessLog` writes one line per request; handlers/services do not log with the request logger yet |
-| NFR-OB2 | Metrics: RPS, latency, error rate, cache hit rate, publish errors | ❌ |
-| NFR-OB3 | Dashboards and alerts (error rate, DLQ depth, 5xx, dependency down) | ❌ |
+| NFR-OB2 | Metrics: RPS, latency, error rate, cache hit rate, publish errors | ✅ `shortlink_*` metrics from server and worker, scraped by Prometheus with MySQL/Redis/RabbitMQ/cAdvisor exporters ([observability.md](observability.md) §3) |
+| NFR-OB3 | Dashboards and alerts (error rate, DLQ depth, 5xx, dependency down) | ✅ local only: provisioned Grafana dashboards, Prometheus alert rules and Alertmanager via `make observe`. Not on the VPS yet, and no external alert receiver |
 
 ### 3.6 Delivery
 
@@ -206,7 +206,7 @@ Ordered by risk if you launch without it.
 
 **Should have soon after**
 
-9. Metrics + dashboards + alerts on 5xx rate, DLQ depth, dependency health (FR-O3, NFR-OB2, OB3).
+9. Metrics + dashboards + alerts on 5xx rate, DLQ depth, dependency health (FR-O3, NFR-OB2, OB3). ✅ done locally; running the stack on the VPS (Grafana behind nginx, alert receiver) is still open.
 10. Split `/livez` and `/readyz` (FR-O2).
 11. Logout, email verification, a revoke-all-sessions endpoint (FR-A8, A10, A11).
 12. Atomic lockout increment (Lua or `SET NX EX` + `INCR`) (NFR-R7).

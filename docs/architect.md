@@ -8,6 +8,13 @@ This document explains how the pieces fit together. For *what* the system must
 do, see [spec.md](spec.md). For *how to work on it*, see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+For a drawn version of this page (the big picture, the redirect path, click
+batching, the server layers, failure behaviour and the observability stack),
+open [architecture.html](architecture.html) in a browser. It is written in
+Vietnamese and is a single self-contained file. This Markdown page stays the
+source of truth: when the architecture changes, update this page first and the
+HTML in the same commit.
+
 ---
 
 ## 1. The big picture
@@ -53,6 +60,24 @@ And **three backing services**:
 | **Redis** | Fast lookups and short-lived state: link cache, refresh tokens, login lockout counters, rate-limit windows |
 | **RabbitMQ** | Decouples "someone clicked" from "write to the database", so redirects stay fast |
 
+### Observability (local only for now)
+
+```
+  server, worker (:9100 /metrics) ◀──scrape── Prometheus :9090 ──alerts──▶ Alertmanager :9093
+  MySQL/Redis/RabbitMQ/cAdvisor exporters ◀──┘      │
+                                                    ▼
+  container stdout (JSON) ──▶ Alloy ──▶ Loki ──▶ Grafana :3000
+```
+
+`make observe` starts the server and worker as containers together with an
+observability stack from `docker-compose.observability.yml`: Prometheus pulls
+`shortlink_*` metrics from a separate `/metrics` port on each program and from
+exporters for MySQL, Redis, RabbitMQ and containers; Alloy ships every
+container's JSON logs to Loki; Grafana shows provisioned dashboards; Prometheus
+alert rules go to Alertmanager. It runs on the developer machine only; the VPS
+does not run it yet. Details, metric list, dashboards and alerts:
+[observability.md](observability.md).
+
 ---
 
 ## 2. What happens on a redirect (the hot path)
@@ -82,6 +107,7 @@ Key ideas:
 - **Cache first.** Most redirects never touch MySQL.
 - **Clicks are async.** The redirect does not wait for the click to be counted.
   If RabbitMQ is down, the redirect still works; that click is lost.
+  The message carries the request ID in an `x-request-id` header.
 - **Expiry is enforced twice:** the cache TTL never outlives `expires_at`, and
   the database path checks `expires_at` before redirecting.
 
@@ -100,6 +126,8 @@ worker ClickConsumer
   └─ failure ──▶ retry once; second failure ──▶ dead-letter queue "clicks.dlq"
                                                 (logged by DLQConsumer)
 ```
+
+If the batch fails, the worker logs the `request_ids` of its messages.
 
 Batching turns thousands of clicks per second into a few database writes.
 
@@ -140,15 +168,16 @@ where they are implemented. That is why tests can swap in simple mocks.
 
 ### Middleware chain
 
-Every request passes through these, outermost first:
+Every request passes through these, outermost first. `metrics.RecordRoute` sits between steps 1 and 2 and tells step 0 which route pattern matched, so 413, CORS and 429 responses keep their route:
 
 | # | Middleware | Purpose |
 |---|---|---|
+| 0 | `metrics.Middleware` | Count and time every request by method, route pattern and status (`/metrics`); outermost so a timed-out request counts as 503 |
 | 1 | `http.TimeoutHandler` | Abort any request that takes longer than 10s |
 | 2 | `SecureHeaders` | HSTS, CSP, X-Frame-Options, nosniff, etc. |
 | 3 | `CORS` | Allow only origins listed in `ALLOWED_ORIGINS` |
 | 4 | `JWTAuth` | If a valid `Authorization: Bearer` token is present, put the user ID in the request context |
-| 5 | `RequestID` | Reuse or create `X-Request-ID`; attach it to the logger |
+| 5 | `RequestID` | Reuse a valid `X-Request-ID` (`[A-Za-z0-9_-]{1,64}`) or create one; attach it to the logger and context |
 | 6 | `AccessLog` | One `request` log line per request: method, path, status, bytes, duration, IP, user ID |
 | 7 | `Recover` | Turn a handler panic into a logged error (with stack) and a JSON 500 |
 | 8 | `MaxBodySize` | Reject bodies over 1 MB (413) |
@@ -202,13 +231,15 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `internal/messaging` | RabbitMQ topology, publisher, click, notification and DLQ consumers | `setup.go` |
 | `internal/mail` | Password reset email over SMTP, or to the log when `SMTP_HOST` is empty | `mail.go` |
 | `internal/middleware` | Everything in the middleware table above | `ratelimit.go` |
-| `internal/ctxkey` | Typed context key for the authenticated user ID | — |
+| `internal/metrics` | Prometheus registry, metric definitions, `/metrics` listener on `METRICS_PORT` | `metrics.go` |
+| `internal/ctxkey` | Typed context keys for the authenticated user ID and the request ID | — |
 | `internal/logger` | zap logger, stored in and read from the request context | — |
 | `pkg/idgen` | Snowflake ID generator + Base62 encoder (IDs become short codes) | `idgen.go` |
 | `api` | Embedded `openapi.yaml` | — |
 | `deploy/migrations` | SQL schema (golang-migrate format) | — |
 | `deploy/nginx` | Reverse proxy config (template; `${DOMAIN}` filled in at container start) | — |
 | `Dockerfile`, `docker-compose.prod.yml` | Production images and single-VPS stack; see [deploy.md](deploy.md) | — |
+| `docker-compose.observability.yml`, `deploy/observability` | Prometheus, Alertmanager, Loki, Alloy, Grafana, cAdvisor and exporters overlay with alert rules, dashboards and the k6 load script; `make observe`, see [observability.md](observability.md) | `prometheus/rules/shortlink.yml` |
 | `.github/workflows/ci.yml` | Tests (with race detector), lint, govulncheck, image build | — |
 
 ---
@@ -311,6 +342,11 @@ Known gap: notifications are never deleted. The `notifications` table only
 grows.
 
 `/healthz` returns 503 if any of MySQL, Redis or RabbitMQ is unreachable.
+
+The observability stack (Prometheus, Loki, Alloy, Grafana, Alertmanager,
+exporters) being down never affects requests. Metrics are in-memory counters
+that Prometheus pulls, and logs go to stdout; the app does not connect to any
+of them. Only the metrics and logs for that period are missing.
 
 The server does not need RabbitMQ to start or keep running: the publisher
 re-dials every 2s in the background and re-declares the exchange and queues

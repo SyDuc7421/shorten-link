@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/ctxkey"
 	"github.com/april/shorten-link/internal/logger"
 )
 
@@ -13,9 +14,13 @@ import (
 // The logger is taken before the goroutine starts because ctx may be done by then.
 func publishAsync(ctx context.Context, pub Publisher, routingKey string, payload any) {
 	log := logger.FromContext(ctx)
+	rid, hasRID := ctxkey.RequestID(ctx)
 	go func() {
 		pctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 		defer cancel()
+		if hasRID {
+			pctx = ctxkey.SetRequestID(pctx, rid)
+		}
 		if err := pub.Publish(pctx, routingKey, payload); err != nil {
 			log.Warn("publish failed", zap.String("routing_key", routingKey), zap.Error(err))
 		}

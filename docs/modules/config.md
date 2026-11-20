@@ -19,6 +19,7 @@ variable, which is better than failing on the first request.
 | `PORT` | `8080` | | HTTP port of the server |
 | `BASE_URL` | `http://localhost:8080` | | Prefix for `short_url` in responses |
 | `ALLOWED_ORIGINS` | empty | | Comma-separated origins allowed by CORS. Empty = none |
+| `METRICS_PORT` | `0` | | Port of the separate Prometheus `/metrics` listener, used by both server and worker. `0` = off. If the port cannot be bound, the program exits. See [metrics.md](metrics.md) |
 | `NODE_ID` | `1` | | Snowflake node ID, 0–1023. **Must differ per server instance** |
 | `MYSQL_HOST`, `MYSQL_PORT` | `localhost`, `3306` | | |
 | `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DB` | | ✔ | |
@@ -39,7 +40,17 @@ variable, which is better than failing on the first request.
 development. `docker-compose.prod.yml` overrides the hostnames and key paths
 inside the containers, so the same `.env` layout works in production. Some
 variables in `.env.example` (`DOMAIN`, `IMAGE_*`, `RABBITMQ_USER`, …) are read
-only by Docker Compose, not by the Go programs.
+only by Docker Compose, not by the Go programs. That includes the observability
+stack's `GRAFANA_ADMIN_PASSWORD` (empty = `admin`), `PROMETHEUS_RETENTION`
+(default `15d`) and `LOKI_RETENTION` (default `168h`), used by
+`docker-compose.observability.yml`.
+
+`docker-compose.yml` (local) does the same for the `app` profile: the `server`
+and `worker` containers get `MYSQL_HOST=mysql`, `REDIS_ADDR=redis:6379`,
+`RABBITMQ_URL` built from `RABBITMQ_USER`/`RABBITMQ_PASSWORD` (both default to
+`guest` when unset), `/keys/...` JWT paths and `METRICS_PORT=9100`. On the host
+(`make run`) `RABBITMQ_URL` is used as written, so keep it in step with
+`RABBITMQ_USER`/`RABBITMQ_PASSWORD`.
 
 ## Connections (`connect.go`)
 

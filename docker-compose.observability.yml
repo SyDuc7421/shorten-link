@@ -1,0 +1,133 @@
+# Observability overlay: metrics, logs, dashboards and alerts for the stack in
+# docker-compose.yml. Use both files together (make observe):
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile app up -d --build --wait
+# Published ports bind 127.0.0.1 only: Grafana 3000, Prometheus 9090, Alertmanager 9093.
+# Loki, Alloy, cAdvisor and the exporters stay inside the compose network.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/observability/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./deploy/observability/alertmanager:/etc/alertmanager:ro
+      - alertmanager_data:/alertmanager
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.10
+    command:
+      - -config.file=/etc/loki/loki.yml
+      - -config.expand-env=true
+    environment:
+      LOKI_RETENTION: ${LOKI_RETENTION:-168h}
+    volumes:
+      - ./deploy/observability/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.22.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./deploy/observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  # Container CPU/RAM. On Docker Desktop / OrbStack (macOS) it sees the Linux VM,
+  # so some container names may be partial or missing.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.61.1
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+
+  # Local: connects as root. Known gap: on the VPS use a dedicated user with
+  # PROCESS, REPLICATION CLIENT, SELECT.
+  mysqld-exporter:
+    image: prom/mysqld-exporter:v0.21.0
+    command:
+      - --mysqld.address=mysql:3306
+      - --mysqld.username=root
+    environment:
+      MYSQLD_EXPORTER_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.97.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # Load generator, started on demand by make load (profile "tools"). Joins the
+  # default network of docker-compose.yml, so it reaches the server as server:8080.
+  k6:
+    image: grafana/k6:2.4.0
+    profiles: ["tools"]
+    environment:
+      BASE_URL: http://server:8080
+      RATE: ${RATE:-50}
+      DURATION: ${DURATION:-5m}
+      SCENARIO: ${SCENARIO:-steady}
+    volumes:
+      - ./deploy/observability/k6:/scripts:ro
+
+volumes:
+  alertmanager_data:
+  prometheus_data:
+  loki_data:
+  grafana_data:

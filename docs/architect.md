@@ -8,6 +8,13 @@ This document explains how the pieces fit together. For *what* the system must
 do, see [spec.md](spec.md). For *how to work on it*, see
 [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+For a drawn version of this page (the big picture, the redirect path, click
+batching, the server layers, failure behaviour and the observability stack),
+open [architecture.html](architecture.html) in a browser. It is written in
+Vietnamese and is a single self-contained file. This Markdown page stays the
+source of truth: when the architecture changes, update this page first and the
+HTML in the same commit.
+
 ---
 
 ## 1. The big picture

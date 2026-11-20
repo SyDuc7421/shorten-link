@@ -116,7 +116,7 @@
           "mode": "multi"
         }
       },
-      "description": "Anything above 0 for 5 minutes fires DLQNotEmpty. No data series stay at 0 when nothing failed."
+      "description": "Anything above 0 for 5 minutes fires DLQNotDraining. No data series stay at 0 when nothing failed."
     },
     {
       "id": 4,

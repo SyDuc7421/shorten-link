@@ -38,14 +38,22 @@ groups:
           summary: "Dependency down ({{ $labels.job }})"
           description: "MySQL, Redis or RabbitMQ is unreachable: {{ $labels.job }} on {{ $labels.instance }} reports down for 2 minutes."
 
-      - alert: DLQNotEmpty
+      - alert: DeadLettered
+        expr: sum by (queue) (increase(shortlink_worker_messages_total{job="worker",result="dlq"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages dead-lettered from {{ $labels.queue }}"
+          description: "The worker dead-lettered about {{ $value }} messages from {{ $labels.queue }} in the last 10 minutes; check the worker logs for the dead-letter lines."
+
+      - alert: DLQNotDraining
         expr: rabbitmq_detailed_queue_messages_ready{queue=~"clicks.dlq|notifications.dlq"} > 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "Dead-letter queue {{ $labels.queue }} has messages"
-          description: "{{ $value }} messages are waiting in {{ $labels.queue }}; inspect them in the RabbitMQ UI and the worker logs."
+          summary: "Dead-letter queue {{ $labels.queue }} is not draining"
+          description: "{{ $value }} dead-letter messages are sitting unconsumed in {{ $labels.queue }}; the worker is not draining them, so check that it is running."
 
       - alert: ClickQueueBacklog
         expr: rabbitmq_detailed_queue_messages_ready{queue="clicks"} > 10000

@@ -265,7 +265,8 @@ to Loki error logs for the same service and time range).
 | `HighLatencyP95` | p95 of `GET /{code}` > 300ms | 10m | warning |
 | `TargetDown` | `up == 0` for any scrape target | 2m | critical |
 | `DependencyDown` | `mysql_up == 0` or `redis_up == 0` (exporters), or the RabbitMQ scrape target is down | 2m | critical |
-| `DLQNotEmpty` | `clicks.dlq` or `notifications.dlq` messages > 0 | 5m | warning |
+| `DeadLettered` | `sum by (queue) (increase(shortlink_worker_messages_total{job="worker",result="dlq"}[10m])) > 0` | — | warning |
+| `DLQNotDraining` | `clicks.dlq` or `notifications.dlq` ready messages > 0 (worker not consuming them) | 5m | warning |
 | `ClickQueueBacklog` | `clicks` ready messages > 10000 | 10m | warning |
 | `PublisherDisconnected` | `shortlink_rabbitmq_publisher_connected == 0` | 2m | warning |
 | `ExpiryScanStale` | last successful scan older than 3 × interval | — | warning |
@@ -274,7 +275,8 @@ Thresholds are starting values; documented as such.
 
 Alertmanager locally: one default receiver with no notification target
 (alerts visible in the Alertmanager and Grafana UI). Grouping by `alertname`,
-`service`.
+`job`: no Prometheus series carries a `service` label (it exists only in Loki),
+and `job` is the compose service name.
 
 ### Load script
 

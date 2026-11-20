@@ -127,7 +127,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=\"error\"}[$__auto]))",
+          "expr": "sum by (service) (count_over_time({service=~\"$service\", level=~\"error|dpanic|panic|fatal\"}[$__auto]))",
           "queryType": "range",
           "legendFormat": "{{service}}"
         }
@@ -175,7 +175,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service=~\"$service\", level=\"error\"}",
+          "expr": "{service=~\"$service\", level=~\"error|dpanic|panic|fatal\"}",
           "queryType": "range"
         }
       ],
@@ -211,7 +211,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{env=\"local\"} | request_id=\"$request_id\"",
+          "expr": "{service=~\".+\"} | request_id != \"\" | request_id=\"$request_id\"",
           "queryType": "range"
         }
       ],

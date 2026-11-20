@@ -73,12 +73,17 @@ RabbitMQ run in Docker (`docker-compose.yml`) and publish their ports on
 ### RabbitMQ credentials
 
 The local RabbitMQ user is `RABBITMQ_USER` / `RABBITMQ_PASSWORD` from `.env`,
-defaulting to `guest` / `guest`, so an existing `.env` keeps working.
-`.env.example` now sets `shortlink` / `changeme_rabbit` and a matching
-`RABBITMQ_URL`. If you set or change them, recreate RabbitMQ and update
-`RABBITMQ_URL` in your `.env` to match. The `-V` matters: the image keeps its
-data in an anonymous volume, and RabbitMQ only creates the default user when
-that volume is empty, so a plain `--force-recreate` keeps the old user.
+defaulting to `guest` / `guest` only when they are unset. `.env.example` has
+always set `shortlink` / `changeme_rabbit`, so an existing `.env` copied from it
+already has a user, and RabbitMQ will create that user, not `guest`, whenever
+it starts with an empty data volume. If your `.env` still has
+`RABBITMQ_URL=amqp://guest:guest@localhost:5672/`, change it to
+`amqp://<RABBITMQ_USER>:<RABBITMQ_PASSWORD>@localhost:5672/` so the URL uses
+the same user and password. Then recreate RabbitMQ. The `-V` matters: the image
+keeps its data in an anonymous volume, and RabbitMQ only creates the default
+user when that volume is empty, so a plain `--force-recreate` keeps the old
+user. Without a matching URL, `make run` silently drops events (the publisher
+stays disconnected) and `go run ./cmd/worker` exits.
 
 ```bash
 docker compose up -d --force-recreate -V rabbitmq

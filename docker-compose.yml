@@ -50,7 +50,8 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     environment:
-      # defaults keep an existing .env (RABBITMQ_URL=amqp://guest:guest@...) working
+      # The broker user comes from RABBITMQ_USER/RABBITMQ_PASSWORD (guest/guest only if unset).
+      # Keep RABBITMQ_URL in .env on the same user/password, or make run cannot connect.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
     ports:

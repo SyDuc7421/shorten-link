@@ -133,7 +133,9 @@ runs two: one on `clicks.dlq` and one on `notifications.dlq` (consumer tag is
 `<queue>-consumer`). Each logs every message that lands there at error level,
 with its body, routing key and `request_id` (if the message has one), then acknowledges it. Dead-lettered clicks are
 **not** counted and dead-lettered notifications are **not** stored. The log
-line is the only trace, so alert on `dead-letter message received`.
+line is the only per-message trace. The consumers that nack count it as
+`shortlink_worker_messages_total{result="dlq"}`, and the `DeadLettered` alert
+fires on that counter; `DLQNotDraining` fires if the DLQ depth stays above 0.
 
 ## The notification consumer (`notification_consumer.go`)
 

@@ -144,7 +144,8 @@ a process never updates still appears: plain counters/gauges/histograms show
 | `shortlink_worker_expiry_scan_last_success_timestamp_seconds` | gauge | | worker | Unix time of the last successful scan. `0` on the server, which never scans |
 
 The DLQ consumers only log dead-lettered messages; they do not update a
-metric. DLQ depth comes from RabbitMQ instead (below).
+metric. Dead-lettering is counted by the consumers that nack
+(`result="dlq"` above), and DLQ depth comes from RabbitMQ (below).
 
 ### 3.2 Metrics from exporters
 
@@ -202,13 +203,13 @@ come from the worker's own scan and have no request id.
 
 ```logql
 # All error lines from the app, one panel per service
-{service=~"server|worker", level="error"}
+{service=~"server|worker", level=~"error|dpanic|panic|fatal"}
 
 # Error count per service over time
-sum by (service) (count_over_time({level="error"}[5m]))
+sum by (service) (count_over_time({level=~"error|dpanic|panic|fatal"}[5m]))
 
 # One request across server and worker (id from the X-Request-ID response header)
-{env="local"} | request_id="7f3c2a9e-..."
+{service=~".+"} | request_id="7f3c2a9e-..."
 
 # Server requests that returned 5xx
 {service="server"} | json | status >= 500
@@ -224,7 +225,7 @@ To trace a request: send it with your own id, then search it.
 
 ```bash
 curl -s -o /dev/null -D - -H 'X-Request-ID: trace-me-1' http://localhost:8080/healthz | grep -i x-request-id
-# then in Grafana: {env="local"} | request_id="trace-me-1"
+# then in Grafana: {service=~".+"} | request_id="trace-me-1"
 ```
 
 ## 5. Dashboards
@@ -246,11 +247,11 @@ The server-side panels filter `job="server"` and the worker panels
 `job="worker"`, because both processes export every `shortlink_*` metric (see
 §3.1).
 
-Known gap: the "Request trace" panel runs `{env="local"} | request_id="$request_id"`.
-With the box empty that becomes `request_id=""`, which matches every line that
-has no request id: all logs from MySQL, RabbitMQ, Grafana and the other
-containers, and the app's start-up lines. So the panel is never empty; type an
-id to narrow it.
+The "Request trace" panel runs
+`{service=~".+"} | request_id != "" | request_id="$request_id"`. With the box
+empty it matches nothing (the panel is empty), and it does not depend on the
+`env` label. Error panels match `level=~"error|dpanic|panic|fatal"`, so
+start-up failures logged at fatal level show up too.
 
 ## 6. Alerts
 
@@ -267,21 +268,23 @@ visible in the Alertmanager UI (<http://localhost:9093>), in Prometheus
 | `HighLatencyP95` | p95 of `GET /{code}` above 300ms over 5m | 10m | warning | Cache hit rate (a drop means MySQL is serving redirects); MySQL queries/slow queries; container CPU in Dependencies and host |
 | `TargetDown` | Any scrape target has `up == 0` | 2m | critical | Prometheus → Status → Targets shows which job and the scrape error; `docker compose ps` for that container; its logs |
 | `DependencyDown` | `mysql_up == 0`, `redis_up == 0`, or `up{job="rabbitmq"} == 0` | 2m | critical | `docker compose ps mysql redis rabbitmq` and their logs. Expected impact is in [architect.md §9](architect.md#9-failure-behaviour). Note `mysql_up`/`redis_up` come from the exporters, so an exporter that cannot log in also reports 0 |
-| `DLQNotEmpty` | `clicks.dlq` or `notifications.dlq` has ready messages | 5m | warning | Worker logs for the dead-letter lines (they include `request_id` when there was one); RabbitMQ UI → Queues. See the note below the table |
+| `DeadLettered` | The worker dead-lettered at least one message in the last 10m (`shortlink_worker_messages_total{result="dlq"}` increased, per queue) | — | warning | Worker logs for `dead-letter message received` (they include `request_id` when there was one); Worker and queues → consume rate by queue and result. Usual causes: MySQL down while the worker consumed, or an invalid event |
+| `DLQNotDraining` | `clicks.dlq` or `notifications.dlq` has ready messages | 5m | warning | Is the worker running (`TargetDown` for `worker`)? RabbitMQ UI → Queues for the stuck messages; worker logs |
 | `ClickQueueBacklog` | `clicks` has more than 10000 ready messages | 10m | warning | Is the worker running (`TargetDown` for `worker`)? Click flush errors and duration in Worker and queues; MySQL health |
 | `PublisherDisconnected` | `shortlink_rabbitmq_publisher_connected == 0` on server or worker | 2m | warning | RabbitMQ up? Credentials (`RABBITMQ_USER`/`RABBITMQ_PASSWORD`)? Server logs for reconnect errors. While it fires, click and notification events are dropped (redirects still work) |
 | `ExpiryScanStale` | Worker's last successful expiry scan is more than 900s old | — | warning | Worker logs for expiry scan errors; Expiry scans by result panel. 900s is 3 × the default `EXPIRY_SCAN_INTERVAL` (5m): change both together. Scoped to `job="worker"` because the server exports the same gauge as 0 |
 
 Notes:
 
-- **`DLQNotEmpty` only fires when the DLQ consumers are not draining.** The
+- **`DLQNotDraining` only fires when the DLQ consumers are not draining.** The
   worker's DLQ consumers log each dead-lettered message and ack it, so while
   the worker runs the DLQ depth goes back to 0 within moments. The alert
   therefore means "messages are piling up in a DLQ and nobody reads them"
-  (worker down or stuck). To see that messages *were* dead-lettered, look at
-  `shortlink_worker_messages_total{result="dlq"}` (Consume rate panel) and the
-  worker's dead-letter log lines. Usual causes: MySQL down while the worker
-  consumed, or an invalid click event.
+  (worker down or stuck). Dead-lettering itself is caught by `DeadLettered`,
+  which uses the worker's own counter
+  `shortlink_worker_messages_total{result="dlq"}` (Consume rate panel), so it
+  fires even though the depth goes back to 0. It has no `for`, and stays active
+  while the 10m window still contains the increase.
 - **`ExpiryScanStale` has no `for`**, so it fires on the first evaluation over
   the threshold. The worker scans once right at start-up; if that scan fails
   (e.g. MySQL not reachable), the gauge stays `0` and the alert fires at once.
@@ -310,8 +313,6 @@ Notes:
 - **Handlers and services do not log with the request logger** (NFR-OB1), so
   only the access log line and worker consumer lines carry `request_id`.
 - **No metric for DLQ consumption**; use queue depth from RabbitMQ.
-- **Logs dashboard:** an empty `request_id` variable matches every line that
-  has no request id (see §5), so the "Request trace" panel is never empty.
 - `make observe-check` validates syntax only; it is not run in CI.
 
 ## 8. Manual acceptance checklist
@@ -324,7 +325,7 @@ Run this after changing the stack (design §10). Start from a fresh state
 3. Prometheus → Status → Targets: every job is `UP` (`server`, `worker`,
    `mysqld-exporter`, `redis-exporter`, `cadvisor`, `loki`, `alloy`,
    `alertmanager`, `prometheus`, `rabbitmq`, `rabbitmq-queues`).
-4. Prometheus → Alerts: the 8 rules from §6 are loaded and none is firing.
+4. Prometheus → Alerts: the 9 rules from §6 are loaded and none is firing.
 5. `make load` exits 0.
 6. Grafana (login `admin`): the folder `shorten-link` has the four dashboards,
    and every panel of Service overview, Worker and queues, and Dependencies and
@@ -340,7 +341,7 @@ Run this after changing the stack (design §10). Start from a fresh state
    (`mysqld-exporter` stays up and reports `mysql_up 0`). Start it again with
    `docker compose start mysql`; the alert resolves at the next evaluations.
 9. Trace one request: `curl -H 'X-Request-ID: accept-1' http://localhost:8080/healthz`,
-   then in Explore search `{env="local"} | request_id="accept-1"` and see the
+   then in Explore search `{service=~".+"} | request_id="accept-1"` and see the
    server access log line. To see a worker line for the same id, send a
    request that publishes a notification event (for example
    `POST /api/admin/links/{code}/disable` as an admin) with your id: the

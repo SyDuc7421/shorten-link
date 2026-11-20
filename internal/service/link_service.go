@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/april/shorten-link/internal/ctxkey"
 	"github.com/april/shorten-link/internal/metrics"
 	"github.com/april/shorten-link/pkg/idgen"
 )
@@ -124,7 +125,7 @@ func (s *LinkService) Shorten(ctx context.Context, userID int64, rawURL, alias s
 	}
 	s.cache.Set(ctx, code, rawURL, ttl) //nolint:errcheck
 
-	s.publishAsync("link.created", map[string]any{"code": code, "user_id": userID})
+	s.publishAsync(ctx, "link.created", map[string]any{"code": code, "user_id": userID})
 
 	metrics.LinksCreated.Inc()
 	return link, nil
@@ -184,7 +185,7 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (_ string, err e
 		if rawURL == disabledMarker {
 			return "", ErrLinkDisabled
 		}
-		s.publishAsync("link.clicked", map[string]any{"code": code})
+		s.publishAsync(ctx, "link.clicked", map[string]any{"code": code})
 		return rawURL, nil
 	}
 
@@ -207,7 +208,7 @@ func (s *LinkService) Resolve(ctx context.Context, code string) (_ string, err e
 		}
 	}
 	s.cache.Set(ctx, code, link.OriginalURL, ttl) //nolint:errcheck
-	s.publishAsync("link.clicked", map[string]any{"code": code})
+	s.publishAsync(ctx, "link.clicked", map[string]any{"code": code})
 
 	return link.OriginalURL, nil
 }
@@ -228,10 +229,15 @@ func redirectOutcome(err error) string {
 
 // publishAsync fires an event without blocking the request. The timeout bounds
 // how long each goroutine can live if the broker stalls.
-func (s *LinkService) publishAsync(routingKey string, payload any) {
+// The request ID is copied from reqCtx so the worker can log it.
+func (s *LinkService) publishAsync(reqCtx context.Context, routingKey string, payload any) {
+	rid, hasRID := ctxkey.RequestID(reqCtx)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 		defer cancel()
+		if hasRID {
+			ctx = ctxkey.SetRequestID(ctx, rid)
+		}
 		s.pub.Publish(ctx, routingKey, payload) //nolint:errcheck
 	}()
 }

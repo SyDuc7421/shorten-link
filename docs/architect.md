@@ -82,6 +82,7 @@ Key ideas:
 - **Cache first.** Most redirects never touch MySQL.
 - **Clicks are async.** The redirect does not wait for the click to be counted.
   If RabbitMQ is down, the redirect still works; that click is lost.
+  The message carries the request ID in an `x-request-id` header.
 - **Expiry is enforced twice:** the cache TTL never outlives `expires_at`, and
   the database path checks `expires_at` before redirecting.
 
@@ -100,6 +101,8 @@ worker ClickConsumer
   └─ failure ──▶ retry once; second failure ──▶ dead-letter queue "clicks.dlq"
                                                 (logged by DLQConsumer)
 ```
+
+If the batch fails, the worker logs the `request_ids` of its messages.
 
 Batching turns thousands of clicks per second into a few database writes.
 
@@ -149,7 +152,7 @@ Every request passes through these, outermost first. `metrics.RecordRoute` sits 
 | 2 | `SecureHeaders` | HSTS, CSP, X-Frame-Options, nosniff, etc. |
 | 3 | `CORS` | Allow only origins listed in `ALLOWED_ORIGINS` |
 | 4 | `JWTAuth` | If a valid `Authorization: Bearer` token is present, put the user ID in the request context |
-| 5 | `RequestID` | Reuse or create `X-Request-ID`; attach it to the logger |
+| 5 | `RequestID` | Reuse a valid `X-Request-ID` (`[A-Za-z0-9_-]{1,64}`) or create one; attach it to the logger and context |
 | 6 | `AccessLog` | One `request` log line per request: method, path, status, bytes, duration, IP, user ID |
 | 7 | `Recover` | Turn a handler panic into a logged error (with stack) and a JSON 500 |
 | 8 | `MaxBodySize` | Reject bodies over 1 MB (413) |

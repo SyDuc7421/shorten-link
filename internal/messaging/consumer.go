@@ -113,7 +113,7 @@ func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log
 	err := repo.BatchUpdateClicks(ctx, b.counts)
 	metrics.ClickFlushDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
-		log.Error("batch update clicks", zap.Error(err))
+		log.Error("batch update clicks", zap.Error(err), zap.Strings("request_ids", b.requestIDs()))
 		metrics.ClickFlushes.WithLabelValues("error").Inc()
 		// Retry once; a message that already failed is dead-lettered so a
 		// persistent DB error cannot loop the same batch forever.
@@ -130,6 +130,18 @@ func (b *clickBatch) flush(ctx context.Context, repo service.LinkRepository, log
 	}
 	b.counts = make(map[string]int64, batchSize)
 	b.pending = b.pending[:0]
+}
+
+// requestIDs lists the request IDs of the pending deliveries (non-empty only,
+// at most batchSize) so a failed batch can be traced back to its requests.
+func (b *clickBatch) requestIDs() []string {
+	var ids []string
+	for _, d := range b.pending {
+		if id := requestIDOf(d); id != "" && len(ids) < batchSize {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // nackResult is the worker_messages result for a delivery nacked with
@@ -168,13 +180,19 @@ func (c *DLQConsumer) Start(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			c.log.Error("dead-letter message received — manual inspection required",
-				zap.ByteString("body", d.Body),
-				zap.String("routing_key", d.RoutingKey),
-			)
-			d.Ack(false) //nolint:errcheck
+			c.handle(d)
 		case <-ctx.Done():
 			return nil
 		}
 	}
+}
+
+// handle logs one dead-letter delivery and acknowledges it.
+func (c *DLQConsumer) handle(d amqp.Delivery) {
+	c.log.Error("dead-letter message received — manual inspection required",
+		zap.ByteString("body", d.Body),
+		zap.String("routing_key", d.RoutingKey),
+		ridField(requestIDOf(d)),
+	)
+	d.Ack(false) //nolint:errcheck
 }

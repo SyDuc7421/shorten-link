@@ -11,6 +11,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 
+	"github.com/april/shorten-link/internal/ctxkey"
 	"github.com/april/shorten-link/internal/metrics"
 )
 
@@ -109,6 +110,37 @@ func (p *Publisher) openChannel() error {
 	return nil
 }
 
+// HeaderRequestID is the AMQP header that carries the request ID to the worker.
+const HeaderRequestID = "x-request-id"
+
+// newPublishing builds the message, adding the request ID header when ctx has one.
+func newPublishing(ctx context.Context, body []byte) amqp.Publishing {
+	msg := amqp.Publishing{
+		DeliveryMode: amqp.Persistent,
+		ContentType:  "application/json",
+		Timestamp:    time.Now(),
+		Body:         body,
+	}
+	if id, ok := ctxkey.RequestID(ctx); ok {
+		msg.Headers = amqp.Table{HeaderRequestID: id}
+	}
+	return msg
+}
+
+// requestIDOf returns the request ID header of d, or "" if absent or not a string.
+func requestIDOf(d amqp.Delivery) string {
+	id, _ := d.Headers[HeaderRequestID].(string)
+	return id
+}
+
+// ridField is a zap field for the request ID, or zap.Skip() when empty.
+func ridField(id string) zap.Field {
+	if id == "" {
+		return zap.Skip()
+	}
+	return zap.String("request_id", id)
+}
+
 // Publish serialises payload as JSON and publishes it to the shortlink exchange.
 // If the channel has been closed it attempts to reopen once before returning an error.
 func (p *Publisher) Publish(ctx context.Context, routingKey string, payload any) error {
@@ -127,12 +159,7 @@ func (p *Publisher) publish(ctx context.Context, routingKey string, payload any)
 		return fmt.Errorf("publisher: marshal: %w", err)
 	}
 
-	msg := amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
-		ContentType:  "application/json",
-		Timestamp:    time.Now(),
-		Body:         body,
-	}
+	msg := newPublishing(ctx, body)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -204,6 +204,15 @@ refresh token can never be created after the reset that was meant to end it.
 signatures, which blocks the classic "change the algorithm to `none`/HMAC"
 attack.
 
+### Request ID on published events
+
+Both `publishAsync` helpers (the function in `publish.go` and the
+`LinkService` method) read the request ID from the request context **before**
+starting the goroutine, then put it on the fresh publish context. The
+publisher turns it into the `x-request-id` message header, so a click or
+notification can be traced back to the request that caused it. `Shorten` and
+`Resolve` pass their request context to the method for this reason.
+
 ### Password reset
 
 Two steps, matching the two endpoints.

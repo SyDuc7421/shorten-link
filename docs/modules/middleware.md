@@ -84,8 +84,12 @@ immediately and never reaches a handler.
 
 ### `RequestID` (`requestid.go`)
 
-Reuses the incoming `X-Request-ID` header, or generates a random 32-hex-character
-ID. The ID is echoed back in the response header, and a logger tagged with
+Reuses the incoming `X-Request-ID` header only if it matches
+`^[A-Za-z0-9_-]{1,64}$`. Anything else (too long, spaces, newlines, non-ASCII,
+empty) is ignored and a random 32-hex-character ID is generated, so a hostile
+client cannot put odd bytes into logs or RabbitMQ headers. The ID is also
+stored in the context (`ctxkey.SetRequestID` / `ctxkey.RequestID`) so the
+service layer can pass it to the worker. The ID is echoed back in the response header, and a logger tagged with
 `request_id` is put in the context. Code further down can log with
 `logger.FromContext(ctx)` so every line for one request carries the same ID.
 `AccessLog` and `Recover` do; handlers and services do not yet.

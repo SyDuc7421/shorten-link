@@ -38,6 +38,11 @@ through RabbitMQ and MySQL.
    sets `shortlink_worker_expiry_scan_last_success_timestamp_seconds`.
 6. Wait in `waitForShutdown`.
 
+Messages published by the server carry the originating request's ID in the
+`x-request-id` header. The consumers log it as `request_id` on failures, on
+dead-lettered messages and when a notification is stored, so one request can be
+followed from the server log into the worker log.
+
 ## Shutdown and failure
 
 `waitForShutdown` returns when either:

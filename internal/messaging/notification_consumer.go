@@ -88,7 +88,7 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 	// Insert ignores shutdown: a delivery already taken finishes, so a
 	// cancelled ctx cannot fail it and push a redelivery to the DLQ.
 	if err := c.repo.Insert(context.WithoutCancel(ctx), n, evt.DedupeKey); err != nil {
-		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey))
+		c.log.Error("insert notification", zap.Error(err), zap.String("dedupe_key", evt.DedupeKey), ridField(requestIDOf(d)))
 		// The expiry scanner publishes link.expiring again on its next scan
 		// while no row exists, so a second failure drops the event instead of
 		// adding a copy to the DLQ every scan.
@@ -103,12 +103,14 @@ func (c *NotificationConsumer) handle(ctx context.Context, d amqp.Delivery) {
 	}
 	d.Ack(false) //nolint:errcheck
 	metrics.WorkerMessages.WithLabelValues(QueueNotifications, "ack").Inc()
+	c.log.Info("notification stored", zap.String("routing_key", d.RoutingKey), ridField(requestIDOf(d)))
 }
 
 func (c *NotificationConsumer) reject(d amqp.Delivery, reason string) {
 	c.log.Warn("invalid notification event, discarding",
 		zap.String("reason", reason),
 		zap.String("routing_key", d.RoutingKey),
+		ridField(requestIDOf(d)),
 		zap.ByteString("body", d.Body),
 	)
 	d.Nack(false, false) //nolint:errcheck

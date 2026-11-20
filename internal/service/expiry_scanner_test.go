@@ -151,7 +151,9 @@ func runScannerBriefly(t *testing.T, repo service.NotificationRepository) {
 	go func() { done <- s.Run(ctx, 10*time.Millisecond) }()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
 }
 
 func TestExpiryScanner_RunRecordsScan(t *testing.T) {

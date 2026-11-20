@@ -6,8 +6,10 @@ worker export, and serves them on `/metrics` from a separate port.
 **Where it sits.** `cmd/server` and `cmd/worker` call `metrics.Serve` at start-up.
 Other packages (middleware, handlers, messaging) import this package and update
 the exported variables. Nothing here imports the rest of the app. The HTTP
-metrics are updated here, by the middleware in `http.go`; the other series stay
-at zero until later changes update them.
+metrics are updated here, by the middleware in `http.go`; the others are updated
+by `service`, `middleware` (rate limit) and `messaging`. What each metric means,
+and the dashboards and alerts built on them, are in
+[../observability.md](../observability.md).
 
 ## How it works
 

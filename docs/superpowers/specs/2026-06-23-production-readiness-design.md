@@ -140,24 +140,7 @@ Networks: one internal bridge; only nginx exposed externally.
 
 ## Phase 3 — Observability
 
-### Prometheus Metrics (`/metrics`)
-Use `prometheus/client_golang`. Instrument:
-- `http_requests_total{method, path, status}` — Counter
-- `http_request_duration_seconds{method, path}` — Histogram (buckets: 5ms–5s)
-- `cache_hits_total` / `cache_misses_total` — Counters in `repository.LinkRedis`
-- `rabbitmq_publish_errors_total` — Counter in `messaging.Publisher`
-
-`/metrics` is internal-only (nginx blocks external access).
-
-### Loki + Promtail
-Promtail scrapes container stdout/stderr via Docker socket.
-Existing zap JSON logs are parsed with Promtail's JSON pipeline stage.
-Labels: `container`, `level`, `request_id`.
-
-### Grafana Dashboards
-Two pre-built dashboards committed as JSON to `deploy/grafana/dashboards/`:
-1. **App overview** — RPS, error rate, P50/P95/P99 latency, cache hit rate
-2. **Logs explorer** — Loki query panel filtered by `level=error`
+Superseded by 2026-11-20-observability-design.md.
 
 ---
 

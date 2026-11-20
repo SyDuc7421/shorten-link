@@ -107,6 +107,8 @@ metrics on port 9100 inside the compose network; it is not published to the host
 `docker-compose.observability.yml` adds Prometheus, Alertmanager, Loki, Alloy,
 Grafana, cAdvisor and the MySQL/Redis exporters on top of the `app` profile.
 Needs `make keys` first and port 8080 free, like the section above.
+The full runbook (every metric, dashboard and alert, LogQL examples, known
+gaps, acceptance checklist) is [docs/observability.md](docs/observability.md).
 
 ```bash
 make observe-check   # validate the Prometheus, Alertmanager and Alloy configs
@@ -114,6 +116,10 @@ make observe         # build and start app + dependencies + stack, print the URL
 make observe-down    # stop everything (keeps the data volumes)
 make load            # 5 min of mixed traffic through k6 (needs make observe running)
 ```
+
+For empty metrics, logs and Grafana state, run `make observe-down`, then
+`docker volume rm shorten-link_prometheus_data shorten-link_loki_data shorten-link_grafana_data`,
+then `make observe`. Do not use `down -v`: it also deletes `mysql_data`, your local database.
 
 `make load` runs `deploy/observability/k6/load.js` in a `grafana/k6` container on
 the compose network. It registers a throwaway user, creates 50 links, then ramps up

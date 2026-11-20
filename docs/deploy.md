@@ -99,5 +99,10 @@ These are tracked in [spec.md §5](spec.md#5-path-to-production-prioritized):
 - **Backups.** Data lives in the `mysql-data`, `redis-data` and `rabbitmq-data`
   volumes. Schedule `mysqldump` off the host before launch.
 - **Image registry.** Images are built on the VPS. CI only checks that they build.
+- **Observability.** Metrics, logs, dashboards and alerts run locally only
+  for now (`make observe`, see [observability.md](observability.md)). The VPS
+  stack does not include Prometheus, Loki or Grafana yet; what it needs
+  (Grafana behind nginx with TLS, an alert receiver, `env="prod"` labels) is in
+  design §9 of [the observability design](superpowers/specs/2026-11-20-observability-design.md#9-path-to-the-vps-not-built-now-design-must-allow-it).
 - **Healthchecks for server/worker containers.** Distroless images have no shell;
   rely on `/healthz` through nginx and on `restart: unless-stopped`.

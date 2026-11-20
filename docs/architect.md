@@ -53,6 +53,24 @@ And **three backing services**:
 | **Redis** | Fast lookups and short-lived state: link cache, refresh tokens, login lockout counters, rate-limit windows |
 | **RabbitMQ** | Decouples "someone clicked" from "write to the database", so redirects stay fast |
 
+### Observability (local only for now)
+
+```
+  server, worker (:9100 /metrics) ◀──scrape── Prometheus :9090 ──alerts──▶ Alertmanager :9093
+  MySQL/Redis/RabbitMQ/cAdvisor exporters ◀──┘      │
+                                                    ▼
+  container stdout (JSON) ──▶ Alloy ──▶ Loki ──▶ Grafana :3000
+```
+
+`make observe` starts the server and worker as containers together with an
+observability stack from `docker-compose.observability.yml`: Prometheus pulls
+`shortlink_*` metrics from a separate `/metrics` port on each program and from
+exporters for MySQL, Redis, RabbitMQ and containers; Alloy ships every
+container's JSON logs to Loki; Grafana shows provisioned dashboards; Prometheus
+alert rules go to Alertmanager. It runs on the developer machine only; the VPS
+does not run it yet. Details, metric list, dashboards and alerts:
+[observability.md](observability.md).
+
 ---
 
 ## 2. What happens on a redirect (the hot path)
@@ -214,7 +232,7 @@ Each package has its own page with the details in [modules/](modules/README.md).
 | `deploy/migrations` | SQL schema (golang-migrate format) | — |
 | `deploy/nginx` | Reverse proxy config (template; `${DOMAIN}` filled in at container start) | — |
 | `Dockerfile`, `docker-compose.prod.yml` | Production images and single-VPS stack; see [deploy.md](deploy.md) | — |
-| `docker-compose.observability.yml`, `deploy/observability` | Prometheus, Alertmanager, Loki, Alloy, Grafana, cAdvisor and exporters overlay with alert rules; `make observe`, see README | — |
+| `docker-compose.observability.yml`, `deploy/observability` | Prometheus, Alertmanager, Loki, Alloy, Grafana, cAdvisor and exporters overlay with alert rules, dashboards and the k6 load script; `make observe`, see [observability.md](observability.md) | `prometheus/rules/shortlink.yml` |
 | `.github/workflows/ci.yml` | Tests (with race detector), lint, govulncheck, image build | — |
 
 ---
@@ -317,6 +335,11 @@ Known gap: notifications are never deleted. The `notifications` table only
 grows.
 
 `/healthz` returns 503 if any of MySQL, Redis or RabbitMQ is unreachable.
+
+The observability stack (Prometheus, Loki, Alloy, Grafana, Alertmanager,
+exporters) being down never affects requests. Metrics are in-memory counters
+that Prometheus pulls, and logs go to stdout; the app does not connect to any
+of them. Only the metrics and logs for that period are missing.
 
 The server does not need RabbitMQ to start or keep running: the publisher
 re-dials every 2s in the background and re-declares the exchange and queues
